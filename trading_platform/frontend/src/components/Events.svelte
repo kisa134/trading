@@ -11,7 +11,7 @@
 
 <div class="events">
   {#each list as ev}
-    <div class="event" class={typeClass(ev.type)}>
+    <div class="event {typeClass(ev.type)}">
       <span class="type">{ev.type}</span>
       {#if ev.price != null}<span class="price">{Number(ev.price).toFixed(2)}</span>{/if}
       {#if ev.side}<span class="side">{ev.side}</span>{/if}
