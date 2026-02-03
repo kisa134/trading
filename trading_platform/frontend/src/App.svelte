@@ -204,21 +204,22 @@
   <div class="panel control-panel">
     <div class="panel-title">Market</div>
     <div class="control-row">
-      <label>Exchange</label>
-      <select bind:value={exchange} on:change={handleExchangeChange}>
+      <label for="exchange-select">Exchange</label>
+      <select id="exchange-select" bind:value={exchange} on:change={handleExchangeChange}>
         <option value="bybit">Bybit</option>
         <option value="binance">Binance</option>
         <option value="okx">OKX</option>
       </select>
     </div>
     <div class="control-row">
-      <label>Symbol</label>
-      <input type="text" bind:value={symbol} placeholder="BTCUSDT" on:keydown={(e) => e.key === 'Enter' && connect()} />
+      <label for="symbol-input">Symbol</label>
+      <input id="symbol-input" type="text" bind:value={symbol} placeholder="BTCUSDT" on:keydown={(e) => e.key === 'Enter' && connect()} />
       <button type="button" class="ghost" on:click={() => connect()}>Apply</button>
     </div>
     <div class="control-row">
-      <label>Поиск (Bybit)</label>
+      <label for="search-input">Поиск (Bybit)</label>
       <input
+        id="search-input"
         type="text"
         bind:value={searchQuery}
         placeholder="ETHUSDT, SOLUSDT, DOGEUSDT..."

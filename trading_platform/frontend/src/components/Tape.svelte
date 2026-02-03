@@ -6,7 +6,7 @@
 
 <div class="tape">
   {#each list as t}
-    <div class="row" class:buy={(t.side || '').toLowerCase().startsWith('b')}" class:sell={!(t.side || '').toLowerCase().startsWith('b')}">
+    <div class="row" class:buy={(t.side || '').toLowerCase().startsWith('b')} class:sell={!(t.side || '').toLowerCase().startsWith('b')}>
       <span class="price">{t.price.toFixed(2)}</span>
       <span class="size">{t.size.toFixed(2)}</span>
     </div>

@@ -6,7 +6,7 @@ services:
     buildCommand: pip install -r requirements.txt
     startCommand: python -m api.main --port $PORT
     envVars:
-      - fromGroup: trading-env
+      - fromGroup: trading-env-5mux
 
   - type: web
     name: trading-frontend
@@ -22,7 +22,7 @@ services:
     buildCommand: pip install -r requirements.txt
     startCommand: python -m storage.hot --redis $REDIS_URL
     envVars:
-      - fromGroup: trading-env
+      - fromGroup: trading-env-5mux
 
   - type: worker
     name: ingestor-bybit
@@ -31,7 +31,7 @@ services:
     buildCommand: pip install -r requirements.txt
     startCommand: python -m ingestors.bybit.main --redis $REDIS_URL --symbol BTCUSDT
     envVars:
-      - fromGroup: trading-env
+      - fromGroup: trading-env-5mux
 
   - type: worker
     name: ingestor-binance
@@ -40,7 +40,7 @@ services:
     buildCommand: pip install -r requirements.txt
     startCommand: python -m ingestors.binance.main --redis $REDIS_URL --symbol BTCUSDT
     envVars:
-      - fromGroup: trading-env
+      - fromGroup: trading-env-5mux
 
   - type: worker
     name: ingestor-okx
@@ -49,7 +49,7 @@ services:
     buildCommand: pip install -r requirements.txt
     startCommand: python -m ingestors.okx.main --redis $REDIS_URL --symbol BTCUSDT
     envVars:
-      - fromGroup: trading-env
+      - fromGroup: trading-env-5mux
 
   - type: worker
     name: tape-aggregator
@@ -58,7 +58,7 @@ services:
     buildCommand: pip install -r requirements.txt
     startCommand: python -m analytics.tape_aggregator --redis $REDIS_URL
     envVars:
-      - fromGroup: trading-env
+      - fromGroup: trading-env-5mux
 
   - type: worker
     name: iceberg-detector
@@ -67,7 +67,7 @@ services:
     buildCommand: pip install -r requirements.txt
     startCommand: python -m analytics.iceberg_detector --redis $REDIS_URL --exchange bybit --symbol BTCUSDT
     envVars:
-      - fromGroup: trading-env
+      - fromGroup: trading-env-5mux
 
   - type: worker
     name: wall-spoof-detector
@@ -76,7 +76,7 @@ services:
     buildCommand: pip install -r requirements.txt
     startCommand: python -m analytics.wall_spoof_detector --redis $REDIS_URL --exchange bybit --symbol BTCUSDT
     envVars:
-      - fromGroup: trading-env
+      - fromGroup: trading-env-5mux
 
   - type: worker
     name: heatmap-footprint
@@ -85,7 +85,7 @@ services:
     buildCommand: pip install -r requirements.txt
     startCommand: python -m analytics.heatmap_footprint_aggregator --redis $REDIS_URL --exchange bybit --symbol BTCUSDT
     envVars:
-      - fromGroup: trading-env
+      - fromGroup: trading-env-5mux
 
   - type: worker
     name: feature-candles
@@ -94,7 +94,7 @@ services:
     buildCommand: pip install -r requirements.txt
     startCommand: python -m analytics.feature_engine_candles --redis $REDIS_URL
     envVars:
-      - fromGroup: trading-env
+      - fromGroup: trading-env-5mux
 
   - type: worker
     name: feature-volume
@@ -103,7 +103,7 @@ services:
     buildCommand: pip install -r requirements.txt
     startCommand: python -m analytics.feature_engine_volume --redis $REDIS_URL
     envVars:
-      - fromGroup: trading-env
+      - fromGroup: trading-env-5mux
 
   - type: worker
     name: feature-orderbook
@@ -112,7 +112,7 @@ services:
     buildCommand: pip install -r requirements.txt
     startCommand: python -m analytics.feature_engine_orderbook --redis $REDIS_URL --exchange bybit --symbol BTCUSDT
     envVars:
-      - fromGroup: trading-env
+      - fromGroup: trading-env-5mux
 
   - type: worker
     name: trend-score
@@ -121,7 +121,7 @@ services:
     buildCommand: pip install -r requirements.txt
     startCommand: python -m analytics.trend_score_engine --redis $REDIS_URL --exchange bybit --symbol BTCUSDT --window 50
     envVars:
-      - fromGroup: trading-env
+      - fromGroup: trading-env-5mux
 
   - type: worker
     name: exhaustion-engine
@@ -130,7 +130,7 @@ services:
     buildCommand: pip install -r requirements.txt
     startCommand: python -m analytics.exhaustion_engine --redis $REDIS_URL --exchange bybit --symbol BTCUSDT
     envVars:
-      - fromGroup: trading-env
+      - fromGroup: trading-env-5mux
 
   - type: worker
     name: rule-reversal
@@ -139,10 +139,10 @@ services:
     buildCommand: pip install -r requirements.txt
     startCommand: python -m analytics.rule_reversal_engine --redis $REDIS_URL --exchange bybit --symbol BTCUSDT
     envVars:
-      - fromGroup: trading-env
+      - fromGroup: trading-env-5mux
 
 envVarGroups:
-  - name: trading-env
+  - name: trading-env-5mux
     envVars:
       - key: REDIS_URL
         sync: false
