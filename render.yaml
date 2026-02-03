@@ -1,0 +1,192 @@
+services:
+  - type: web
+    name: trading-api
+    env: docker
+    rootDir: trading_platform
+    dockerfilePath: trading_platform/Dockerfile
+    startCommand: python -m api.main --port $PORT
+    envVars:
+      - key: REDIS_URL
+        fromDatabase:
+          name: trading-redis
+          property: connectionString
+
+  - type: web
+    name: trading-frontend
+    env: docker
+    rootDir: trading_platform
+    dockerfilePath: trading_platform/frontend/Dockerfile
+    startCommand: sh -c "serve -s dist -l $PORT"
+
+  - type: worker
+    name: hot-storage
+    env: docker
+    rootDir: trading_platform
+    dockerfilePath: trading_platform/Dockerfile
+    startCommand: python -m storage.hot --redis $REDIS_URL
+    envVars:
+      - key: REDIS_URL
+        fromDatabase:
+          name: trading-redis
+          property: connectionString
+
+  - type: worker
+    name: ingestor-bybit
+    env: docker
+    rootDir: trading_platform
+    dockerfilePath: trading_platform/Dockerfile
+    startCommand: python -m ingestors.bybit.main --redis $REDIS_URL --symbol BTCUSDT
+    envVars:
+      - key: REDIS_URL
+        fromDatabase:
+          name: trading-redis
+          property: connectionString
+
+  - type: worker
+    name: ingestor-binance
+    env: docker
+    rootDir: trading_platform
+    dockerfilePath: trading_platform/Dockerfile
+    startCommand: python -m ingestors.binance.main --redis $REDIS_URL --symbol BTCUSDT
+    envVars:
+      - key: REDIS_URL
+        fromDatabase:
+          name: trading-redis
+          property: connectionString
+
+  - type: worker
+    name: ingestor-okx
+    env: docker
+    rootDir: trading_platform
+    dockerfilePath: trading_platform/Dockerfile
+    startCommand: python -m ingestors.okx.main --redis $REDIS_URL --symbol BTCUSDT
+    envVars:
+      - key: REDIS_URL
+        fromDatabase:
+          name: trading-redis
+          property: connectionString
+
+  - type: worker
+    name: tape-aggregator
+    env: docker
+    rootDir: trading_platform
+    dockerfilePath: trading_platform/Dockerfile
+    startCommand: python -m analytics.tape_aggregator --redis $REDIS_URL
+    envVars:
+      - key: REDIS_URL
+        fromDatabase:
+          name: trading-redis
+          property: connectionString
+
+  - type: worker
+    name: iceberg-detector
+    env: docker
+    rootDir: trading_platform
+    dockerfilePath: trading_platform/Dockerfile
+    startCommand: python -m analytics.iceberg_detector --redis $REDIS_URL --exchange bybit --symbol BTCUSDT
+    envVars:
+      - key: REDIS_URL
+        fromDatabase:
+          name: trading-redis
+          property: connectionString
+
+  - type: worker
+    name: wall-spoof-detector
+    env: docker
+    rootDir: trading_platform
+    dockerfilePath: trading_platform/Dockerfile
+    startCommand: python -m analytics.wall_spoof_detector --redis $REDIS_URL --exchange bybit --symbol BTCUSDT
+    envVars:
+      - key: REDIS_URL
+        fromDatabase:
+          name: trading-redis
+          property: connectionString
+
+  - type: worker
+    name: heatmap-footprint
+    env: docker
+    rootDir: trading_platform
+    dockerfilePath: trading_platform/Dockerfile
+    startCommand: python -m analytics.heatmap_footprint_aggregator --redis $REDIS_URL --exchange bybit --symbol BTCUSDT
+    envVars:
+      - key: REDIS_URL
+        fromDatabase:
+          name: trading-redis
+          property: connectionString
+
+  - type: worker
+    name: feature-candles
+    env: docker
+    rootDir: trading_platform
+    dockerfilePath: trading_platform/Dockerfile
+    startCommand: python -m analytics.feature_engine_candles --redis $REDIS_URL
+    envVars:
+      - key: REDIS_URL
+        fromDatabase:
+          name: trading-redis
+          property: connectionString
+
+  - type: worker
+    name: feature-volume
+    env: docker
+    rootDir: trading_platform
+    dockerfilePath: trading_platform/Dockerfile
+    startCommand: python -m analytics.feature_engine_volume --redis $REDIS_URL
+    envVars:
+      - key: REDIS_URL
+        fromDatabase:
+          name: trading-redis
+          property: connectionString
+
+  - type: worker
+    name: feature-orderbook
+    env: docker
+    rootDir: trading_platform
+    dockerfilePath: trading_platform/Dockerfile
+    startCommand: python -m analytics.feature_engine_orderbook --redis $REDIS_URL --exchange bybit --symbol BTCUSDT
+    envVars:
+      - key: REDIS_URL
+        fromDatabase:
+          name: trading-redis
+          property: connectionString
+
+  - type: worker
+    name: trend-score
+    env: docker
+    rootDir: trading_platform
+    dockerfilePath: trading_platform/Dockerfile
+    startCommand: python -m analytics.trend_score_engine --redis $REDIS_URL --exchange bybit --symbol BTCUSDT --window 50
+    envVars:
+      - key: REDIS_URL
+        fromDatabase:
+          name: trading-redis
+          property: connectionString
+
+  - type: worker
+    name: exhaustion-engine
+    env: docker
+    rootDir: trading_platform
+    dockerfilePath: trading_platform/Dockerfile
+    startCommand: python -m analytics.exhaustion_engine --redis $REDIS_URL --exchange bybit --symbol BTCUSDT
+    envVars:
+      - key: REDIS_URL
+        fromDatabase:
+          name: trading-redis
+          property: connectionString
+
+  - type: worker
+    name: rule-reversal
+    env: docker
+    rootDir: trading_platform
+    dockerfilePath: trading_platform/Dockerfile
+    startCommand: python -m analytics.rule_reversal_engine --redis $REDIS_URL --exchange bybit --symbol BTCUSDT
+    envVars:
+      - key: REDIS_URL
+        fromDatabase:
+          name: trading-redis
+          property: connectionString
+
+databases:
+  - name: trading-redis
+    ipAllowList: []
+    plan: free

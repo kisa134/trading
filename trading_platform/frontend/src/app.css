@@ -1,0 +1,38 @@
+:root {
+  --bg: #000;
+  --bg-panel: #0a0a0a;
+  --bg-panel-2: #060606;
+  --border: #141414;
+  --border-strong: #1f1f1f;
+  --text: #f2f2f2;
+  --text-muted: #8b8b8b;
+  --accent: #38bdf8;
+  --accent-2: #a855f7;
+  --buy: #22d3ee;
+  --sell: #fb7185;
+  --font-mono: 'JetBrains Mono', 'Fira Code', 'Consolas', monospace;
+}
+
+* { box-sizing: border-box; }
+html, body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+#app { height: 100%; display: flex; flex-direction: column; }
+
+.panel {
+  border: 1px solid var(--border);
+  background: linear-gradient(180deg, var(--bg-panel), var(--bg-panel-2));
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.02), 0 10px 30px rgba(0, 0, 0, 0.4);
+}
+.panel-title {
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+  font-weight: 600;
+  background: linear-gradient(90deg, rgba(56, 189, 248, 0.15), rgba(168, 85, 247, 0.12), rgba(0, 0, 0, 0));
+}
