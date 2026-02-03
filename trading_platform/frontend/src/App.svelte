@@ -7,6 +7,7 @@
   import Events from './components/Events.svelte'
   import TrendAI from './components/TrendAI.svelte'
   import { wsUrl, fetchBybitSymbols } from './lib/api'
+  import { formatTime } from './lib/format'
 
   let exchange = 'bybit'
   let symbol = 'BTCUSDT'
@@ -279,6 +280,7 @@
       <span class="dot" class:ok={connected} class:disconnected={!connected}></span>
       <span>{connected ? 'Connected' : 'Disconnected'}</span>
     </div>
+    <div class="last-update">Обновлено: {formatTime(currentLatest)}</div>
     <button type="button" on:click={() => connect()}>Reconnect</button>
   </div>
 </div>
@@ -384,6 +386,7 @@
   .hint.error { color: var(--sell); }
   .time-range { color: var(--text-muted); font-variant-numeric: tabular-nums; }
   .status-line { display: flex; align-items: center; gap: 8px; }
+  .last-update { font-size: 10px; color: var(--text-muted); font-variant-numeric: tabular-nums; }
 
   .tabs {
     display: flex;
