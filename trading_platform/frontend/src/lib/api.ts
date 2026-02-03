@@ -1,5 +1,11 @@
 const isDev = typeof location !== 'undefined' && location.port === '5173'
-const API_ORIGIN = (import.meta as { env?: { VITE_API_URL?: string } }).env?.VITE_API_URL ?? ''
+const envApi = (import.meta as { env?: { VITE_API_URL?: string } }).env?.VITE_API_URL ?? ''
+// На Render: если VITE_API_URL не задан — выводим API из текущего хоста (trading-frontend-* → trading-api-*)
+const derivedOnRender =
+  typeof location !== 'undefined' && location.hostname.includes('onrender.com')
+    ? location.protocol + '//' + location.hostname.replace(/trading-frontend/, 'trading-api')
+    : ''
+const API_ORIGIN = envApi || derivedOnRender
 const API_WS = API_ORIGIN
   ? (API_ORIGIN.startsWith('https') ? 'wss:' : 'ws:') + '//' + new URL(API_ORIGIN).host + '/ws'
   : isDev

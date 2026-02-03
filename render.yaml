@@ -16,7 +16,7 @@ services:
     staticPublishPath: dist
     envVars:
       - key: VITE_API_URL
-        value: https://trading-api.onrender.com
+        value: https://trading-api-5mux.onrender.com
 
   - type: worker
     name: hot-storage
