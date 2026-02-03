@@ -12,8 +12,11 @@ services:
     name: trading-frontend
     env: static
     rootDir: trading_platform/frontend
-    buildCommand: npm ci && npm run build
+    buildCommand: npm install && npm run build
     staticPublishPath: dist
+    envVars:
+      - key: VITE_API_URL
+        value: https://trading-api.onrender.com
 
   - type: worker
     name: hot-storage
