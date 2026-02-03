@@ -10,10 +10,10 @@
 
 <div class="footprint">
   {#each lastBars as bar}
+    {@const sumDelta = barDeltaSum(bar)}
     <div class="bar-block">
       <div class="bar-header">
         <span class="bar-time">{formatTime(bar.start)}</span>
-        {@const sumDelta = barDeltaSum(bar)}
         <span class="bar-delta" class:delta-pos={sumDelta >= 0} class:delta-neg={sumDelta < 0}>
           Δ {sumDelta >= 0 ? '+' : ''}{sumDelta.toFixed(0)}
         </span>
