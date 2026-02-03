@@ -1,36 +1,60 @@
 <script lang="ts">
   import { formatPrice, formatTime } from '../lib/format'
   export let bars: Array<{ start: number; end: number; levels: Array<{ price: number; vol_bid: number; vol_ask: number; delta: number }> }> = []
-  const maxBars = 10
+  export let maxBars = 10
+  export let showDelta = true
+  export let sortLevelsBy: 'price' | 'volume' = 'price'
+  export let colorBid = 'var(--buy)'
+  export let colorAsk = 'var(--sell)'
+  export let colorDeltaPos = 'var(--buy)'
+  export let colorDeltaNeg = 'var(--sell)'
+  let settingsOpen = false
   $: lastBars = bars.slice(-maxBars)
   function barDeltaSum(bar: { levels: Array<{ delta: number }> }): number {
     return bar.levels.reduce((a, l) => a + l.delta, 0)
   }
+  function sortedLevels(levels: Array<{ price: number; vol_bid: number; vol_ask: number; delta: number }>) {
+    if (sortLevelsBy === 'volume') return [...levels].sort((a, b) => (b.vol_bid + b.vol_ask) - (a.vol_bid + a.vol_ask))
+    return levels
+  }
 </script>
 
-<div class="footprint">
+<div class="footprint" style="--fp-bid: {colorBid}; --fp-ask: {colorAsk}; --fp-delta-pos: {colorDeltaPos}; --fp-delta-neg: {colorDeltaNeg};">
+  <button type="button" class="footprint-settings-btn" title="Настройки" on:click={() => (settingsOpen = !settingsOpen)}>⚙</button>
+  {#if settingsOpen}
+    <div class="footprint-settings">
+      <label>Баров <input type="number" min="1" max="50" bind:value={maxBars} /></label>
+      <label><input type="checkbox" bind:checked={showDelta} /> Delta</label>
+      <label>Сортировка <select bind:value={sortLevelsBy}><option value="price">По цене</option><option value="volume">По объёму</option></select></label>
+      <label>Bid <input type="color" bind:value={colorBid} /></label>
+      <label>Ask <input type="color" bind:value={colorAsk} /></label>
+    </div>
+  {/if}
   {#each lastBars as bar}
     {@const sumDelta = barDeltaSum(bar)}
+    {@const levels = sortedLevels(bar.levels)}
     <div class="bar-block">
       <div class="bar-header">
         <span class="bar-time">{formatTime(bar.start)}</span>
-        <span class="bar-delta" class:delta-pos={sumDelta >= 0} class:delta-neg={sumDelta < 0}>
-          Δ {sumDelta >= 0 ? '+' : ''}{sumDelta.toFixed(0)}
-        </span>
+        {#if showDelta}
+          <span class="bar-delta" class:delta-pos={sumDelta >= 0} class:delta-neg={sumDelta < 0}>
+            Δ {sumDelta >= 0 ? '+' : ''}{sumDelta.toFixed(0)}
+          </span>
+        {/if}
       </div>
-      <div class="level level-head">
+      <div class="level level-head" class:no-delta={!showDelta}>
         <span class="price">Price</span>
         <span class="bid">Bid</span>
         <span class="ask">Ask</span>
-        <span class="delta">Δ</span>
+        {#if showDelta}<span class="delta">Δ</span>{/if}
       </div>
       <div class="levels">
-        {#each bar.levels as level}
-          <div class="level" class:delta-pos={level.delta >= 0} class:delta-neg={level.delta < 0}>
+        {#each levels as level}
+          <div class="level" class:no-delta={!showDelta} class:delta-pos={level.delta >= 0} class:delta-neg={level.delta < 0}>
             <span class="price">{formatPrice(level.price)}</span>
             <span class="bid">{level.vol_bid.toFixed(0)}</span>
             <span class="ask">{level.vol_ask.toFixed(0)}</span>
-            <span class="delta">{level.delta >= 0 ? '+' : ''}{level.delta.toFixed(0)}</span>
+            {#if showDelta}<span class="delta">{level.delta >= 0 ? '+' : ''}{level.delta.toFixed(0)}</span>{/if}
           </div>
         {/each}
       </div>
@@ -52,9 +76,15 @@
   .level-head { color: var(--text-muted); font-size: 10px; margin-bottom: 2px; }
   .levels { display: flex; flex-direction: column; gap: 2px; }
   .level { display: grid; grid-template-columns: 60px 40px 40px 40px; gap: 8px; align-items: center; }
-  .level.delta-pos .delta { color: var(--buy); }
-  .level.delta-neg .delta { color: var(--sell); }
-  .bid { color: var(--buy); }
-  .ask { color: var(--sell); }
+  .level.no-delta, .level-head.no-delta { grid-template-columns: 60px 40px 40px; }
+  .level.delta-pos .delta { color: var(--fp-delta-pos, var(--buy)); }
+  .level.delta-neg .delta { color: var(--fp-delta-neg, var(--sell)); }
+  .bid { color: var(--fp-bid); }
+  .ask { color: var(--fp-ask); }
   .empty { color: var(--text-muted); padding: 8px; }
+  .footprint { position: relative; }
+  .footprint-settings-btn { position: absolute; top: 4px; right: 4px; padding: 2px 6px; font-size: 12px; background: #111; border: 1px solid var(--border); color: var(--text); cursor: pointer; z-index: 5; }
+  .footprint-settings { position: absolute; top: 28px; right: 4px; background: var(--bg-panel); border: 1px solid var(--border-strong); padding: 8px; z-index: 20; display: flex; flex-direction: column; gap: 4px; font-size: 11px; }
+  .footprint-settings label { display: flex; align-items: center; gap: 6px; }
+  .footprint-settings input[type="number"] { width: 48px; }
 </style>

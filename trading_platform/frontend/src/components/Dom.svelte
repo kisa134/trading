@@ -1,9 +1,9 @@
 <script lang="ts">
   import { formatPrice, formatSize } from '../lib/format'
   export let data: { ts: number; bids: [number, number][]; asks: [number, number][] } | null = null
-  const limit = 20
-  $: bids = data?.bids?.slice(0, limit) ?? []
-  $: asks = data?.asks?.slice(0, limit) ?? []
+  export let depth = 20
+  $: bids = data?.bids?.slice(0, depth) ?? []
+  $: asks = data?.asks?.slice(0, depth) ?? []
   $: maxSize = Math.max(
     ...bids.map(([, s]) => s),
     ...asks.map(([, s]) => s),

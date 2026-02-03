@@ -38,3 +38,25 @@ export async function fetchBybitSymbols() {
   const list = data?.result?.list || []
   return list.map((item: { symbol?: string }) => item.symbol).filter(Boolean)
 }
+
+export type Candle = {
+  start: number
+  open: number
+  high: number
+  low: number
+  close: number
+  volume: number
+  confirm: boolean
+}
+
+export async function fetchKline(
+  exchange: string,
+  symbol: string,
+  interval = 1,
+  limit = 500
+): Promise<Candle[]> {
+  const r = await fetch(
+    `${API_BASE}/kline/${exchange}/${symbol}?interval=${interval}&limit=${limit}`
+  )
+  return r.json()
+}

@@ -17,6 +17,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from shared.streams import (
     STREAM_ORDERBOOK_UPDATES,
     STREAM_TRADES,
+    STREAM_KLINE,
     STREAM_HEATMAP_SLICES,
     STREAM_FOOTPRINT_BARS,
     STREAM_EVENTS,
@@ -278,6 +279,44 @@ async def get_signals_rule(exchange: str, symbol: str, limit: int = 200):
     key = REDIS_KEY_SIGNALS_RULE.format(exchange=exchange, symbol=symbol)
     items = await r.lrange(key, -limit, -1)
     return [json.loads(x) for x in (items or [])]
+
+
+@app.get("/kline/{exchange}/{symbol}")
+async def get_kline(
+    exchange: str,
+    symbol: str,
+    interval: int = Query(1, description="Candle interval in minutes"),
+    limit: int = Query(500, le=2000),
+):
+    """REST: last N candles from Redis stream (filtered by exchange/symbol)."""
+    r = await get_redis()
+    messages = await r.xrevrange(STREAM_KLINE, count=min(limit * 3, 6000))
+    result = []
+    for _mid, fields in messages or []:
+        payload_str = (fields or {}).get("payload")
+        if not payload_str:
+            continue
+        try:
+            payload = json.loads(payload_str)
+        except json.JSONDecodeError:
+            continue
+        if not _match(exchange, symbol, payload):
+            continue
+        if str(payload.get("interval")) != str(interval):
+            continue
+        result.append({
+            "start": payload.get("start"),
+            "open": float(payload.get("open", 0)),
+            "high": float(payload.get("high", 0)),
+            "low": float(payload.get("low", 0)),
+            "close": float(payload.get("close", 0)),
+            "volume": float(payload.get("volume", 0)),
+            "confirm": bool(payload.get("confirm", False)),
+        })
+        if len(result) >= limit:
+            break
+    result.reverse()
+    return result
 
 
 # --- History (cold storage or Redis fallback) ---
