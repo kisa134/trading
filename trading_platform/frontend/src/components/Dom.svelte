@@ -17,7 +17,7 @@
       {#each [...asks].reverse() as [price, size]}
         <tr class="ask">
           <td></td><td></td>
-          <td class="size"><span class="bar" style="width: {100 * size / maxSize}%" class="ask-bar"></span>{size.toFixed(2)}</td>
+          <td class="size"><span class="bar ask-bar" style="width: {100 * size / maxSize}%"></span>{size.toFixed(2)}</td>
           <td>{price.toFixed(2)}</td>
         </tr>
       {/each}
@@ -27,7 +27,7 @@
       {#each bids as [price, size]}
         <tr class="bid">
           <td>{price.toFixed(2)}</td>
-          <td class="size"><span class="bar" style="width: {100 * size / maxSize}%" class="bid-bar"></span>{size.toFixed(2)}</td>
+          <td class="size"><span class="bar bid-bar" style="width: {100 * size / maxSize}%"></span>{size.toFixed(2)}</td>
           <td></td><td></td>
         </tr>
       {/each}
