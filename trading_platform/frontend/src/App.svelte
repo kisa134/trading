@@ -73,6 +73,11 @@
   let symbolDropdownOpen = false
   let menuOpen = false
 
+  function setDomDepthFromSelect(e: Event) {
+    const el = e.currentTarget as HTMLSelectElement
+    if (el) domDepth = Number(el.value)
+  }
+
   const normalizeTs = (ts: number) => (ts < 10_000_000_000 ? ts * 1000 : ts)
 
   $: timeframeMs = timeframeOptions.find(t => t.label === timeframe)?.ms ?? 300_000
@@ -365,7 +370,7 @@
     <aside class="left panel" style="width: {domWidth}px;">
       <div class="panel-title dom-title">
         <span>DOM · {symbol}</span>
-        <select class="depth-select" value={domDepth} on:change={(e) => (domDepth = Number((e.currentTarget as HTMLSelectElement).value))}>
+        <select class="depth-select" value={domDepth} on:change={setDomDepthFromSelect}>
           <option value={5}>5</option>
           <option value={10}>10</option>
           <option value={20}>20</option>
