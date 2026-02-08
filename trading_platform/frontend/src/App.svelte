@@ -1,14 +1,13 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte'
-  import Dom from './components/Dom.svelte'
+  import DomAligned from './components/DomAligned.svelte'
   import Tape from './components/Tape.svelte'
-  import Heatmap from './components/Heatmap.svelte'
   import Footprint from './components/Footprint.svelte'
   import Events from './components/Events.svelte'
   import TrendAI from './components/TrendAI.svelte'
+  import ChartHeatmapBubbles from './components/ChartHeatmapBubbles.svelte'
   import { wsUrl, fetchBybitSymbols, fetchKline, type Candle } from './lib/api'
   import { formatTime } from './lib/format'
-  import Chart from './components/Chart.svelte'
   import Dashboard from './components/Dashboard.svelte'
 
   let exchange = 'bybit'
@@ -25,13 +24,7 @@
   let exhaustionScores: Array<{ ts: number; exhaustion_score: number; absorption_score: number }> = []
   let ruleSignals: Array<{ ts: number; prob_reversal_rule: number; reversal_horizon_bars: number; expected_move_range: [number, number] }> = []
   let candles: Candle[] = []
-  let chartMode: 'line' | 'candles' = 'candles'
-  let chartColorUp = '#22d3ee'
-  let chartColorDown = '#fb7185'
-  let chartLineColor = '#38bdf8'
-  let domWidth = 220
   let domDepth = 20
-  let resizingDom = false
 
   let activeTab: 'Flow' | 'Dashboard' | 'TrendAI' | 'Footprint' | 'MLLab' | 'Logs' = 'Flow'
 
@@ -61,17 +54,18 @@
   let isLive = true
   let manualWindowStart = 0
   let manualWindowEnd = 0
-  const panelColors = ['#38bdf8', '#a855f7', '#f59e0b', '#22d3ee', '#fb7185']
-  type ChartPanel = { id: string; timeframe: string; color: string; windowStart: number; windowEnd: number }
-  let chartPanels: ChartPanel[] = []
-  let addPanelTf = '5m'
-  let addPanelColor = '#a855f7'
-
   let symbols: string[] = []
   let symbolsLoading = false
   let symbolsError = ''
   let symbolDropdownOpen = false
   let menuOpen = false
+
+  let chartScale = { priceMin: 0, priceMax: 1, plotH: 300 }
+  $: lastPrice =
+    trades[0]?.price ??
+    (dom?.bids?.[0]?.[0] != null && dom?.asks?.[0]?.[0] != null
+      ? (dom.bids[0][0] + dom.asks[0][0]) / 2
+      : null)
 
   function setDomDepthFromSelect(e: Event) {
     const el = e.currentTarget as HTMLSelectElement
@@ -106,28 +100,6 @@
   function goLive() {
     isLive = true
   }
-  function addChartPanel() {
-    const ms = timeframeOptions.find((t) => t.label === addPanelTf)?.ms ?? 300_000
-    const now = currentLatest
-    chartPanels = [
-      ...chartPanels,
-      { id: crypto.randomUUID(), timeframe: addPanelTf, color: addPanelColor, windowStart: now - ms, windowEnd: now },
-    ]
-  }
-  function removeChartPanel(id: string) {
-    chartPanels = chartPanels.filter((p) => p.id !== id)
-  }
-  function setPanelTimeWindow(id: string, start: number, end: number) {
-    chartPanels = chartPanels.map((p) => (p.id === id ? { ...p, windowStart: start, windowEnd: end } : p))
-  }
-  function panelGoLive(id: string) {
-    const p = chartPanels.find((x) => x.id === id)
-    if (!p) return
-    const ms = timeframeOptions.find((t) => t.label === p.timeframe)?.ms ?? 300_000
-    chartPanels = chartPanels.map((x) =>
-      x.id === id ? { ...x, windowEnd: currentLatest, windowStart: currentLatest - ms } : x
-    )
-  }
   const inWindow = (ts: number) => {
     const t = normalizeTs(ts)
     return t >= windowStart && t <= windowEnd
@@ -136,12 +108,6 @@
   $: viewHeatmap = heatmapSlices.filter(s => inWindow(s.ts))
   $: viewFootprint = footprintBars.filter(b => inWindow(b.start))
   $: viewEvents = events.filter(e => inWindow(e.ts)).slice(0, maxEvents)
-  function heatmapForWindow(start: number, end: number) {
-    return heatmapSlices.filter((s) => {
-      const t = normalizeTs(s.ts)
-      return t >= start && t <= end
-    })
-  }
 
   $: symbolFilter = (symbol || '').trim().toUpperCase()
   $: symbolSearchResults = exchange === 'bybit' && symbolFilter.length >= 2
@@ -255,31 +221,15 @@
     if (!document.querySelector('.status-menu-wrap')?.contains(t)) menuOpen = false
   }
 
-  function handleDomResizeStart() {
-    resizingDom = true
-  }
-  function handleDomResizeMove(e: MouseEvent) {
-    if (!resizingDom) return
-    const newW = e.clientX
-    if (newW >= 160 && newW <= 500) domWidth = newW
-  }
-  function handleDomResizeEnd() {
-    resizingDom = false
-  }
-
   onMount(() => {
     connect()
     loadSymbols()
     loadCandles()
     window.addEventListener('click', handleClickOutside)
-    window.addEventListener('mousemove', handleDomResizeMove)
-    window.addEventListener('mouseup', handleDomResizeEnd)
   })
   onDestroy(() => {
     if (ws) ws.close()
     window.removeEventListener('click', handleClickOutside)
-    window.removeEventListener('mousemove', handleDomResizeMove)
-    window.removeEventListener('mouseup', handleDomResizeEnd)
   })
 </script>
 
@@ -366,8 +316,29 @@
 </div>
 
 {#if activeTab === 'Flow'}
-  <div class="layout" class:resizing={resizingDom}>
-    <aside class="left panel" style="width: {domWidth}px;">
+  <div class="layout layout-unified">
+    <aside class="left panel panel-left-unified" style="width: 240px;">
+      <div class="panel-title">Events · {symbol}</div>
+      <Events items={viewEvents} />
+      <div class="panel-title" style="margin-top: 8px;">Tape · {symbol}</div>
+      <Tape trades={viewTrades} />
+      <div class="panel-title" style="margin-top: 8px;">Footprint</div>
+      <Footprint bars={viewFootprint} />
+    </aside>
+    <main class="center panel center-unified">
+      <div class="panel-title">Heatmap + Volume · {symbol} · {timeframe} · {isLive ? 'Live' : 'Paused'}</div>
+      <ChartHeatmapBubbles
+        slices={viewHeatmap}
+        candles={candles}
+        {windowStart}
+        {windowEnd}
+        onTimeWindowChange={setTimeWindow}
+        onScaleChange={(info) => {
+          chartScale = { priceMin: info.priceMin, priceMax: info.priceMax, plotH: info.plotH }
+        }}
+      />
+    </main>
+    <aside class="right panel panel-right-unified" style="width: 220px;">
       <div class="panel-title dom-title">
         <span>DOM · {symbol}</span>
         <select class="depth-select" value={domDepth} on:change={setDomDepthFromSelect}>
@@ -377,85 +348,15 @@
           <option value={50}>50</option>
         </select>
       </div>
-      <Dom data={dom} depth={domDepth} />
-    </aside>
-    <div
-      class="resizer"
-      role="separator"
-      aria-label="Resize DOM panel"
-      on:mousedown={(e) => { e.preventDefault(); handleDomResizeStart() }}
-    ></div>
-    <main class="center">
-      <div class="panel chart-panel">
-        <div class="panel-title chart-title">
-          <span>Price · {symbol}</span>
-          <div class="chart-controls">
-            <button type="button" class:active={chartMode === 'line'} on:click={() => (chartMode = 'line')}>Line</button>
-            <button type="button" class:active={chartMode === 'candles'} on:click={() => (chartMode = 'candles')}>Candles</button>
-            <label class="color-label">Up <input type="color" bind:value={chartColorUp} /></label>
-            <label class="color-label">Down <input type="color" bind:value={chartColorDown} /></label>
-            <label class="color-label">Line <input type="color" bind:value={chartLineColor} /></label>
-          </div>
-        </div>
-        <Chart
-          candles={candles}
-          {windowStart}
-          {windowEnd}
-          onTimeWindowChange={setTimeWindow}
-          mode={chartMode}
-          lineColor={chartLineColor}
-          candleUp={chartColorUp}
-          candleDown={chartColorDown}
-        />
-      </div>
-      <div class="panel" style="flex: 1; display: flex; flex-direction: column;">
-        <div class="panel-title">Heatmap · {symbol} · {timeframe} · {isLive ? 'Live' : 'Paused'}</div>
-        <Heatmap
-          slices={viewHeatmap}
-          {windowStart}
-          {windowEnd}
-          onTimeWindowChange={setTimeWindow}
-        />
-      </div>
-      <div class="add-panel-row panel">
-        <span class="add-panel-label">Добавить панель:</span>
-        <select bind:value={addPanelTf}>
-          {#each timeframeOptions as tf}
-            <option value={tf.label}>{tf.label}</option>
-          {/each}
-        </select>
-        <label class="color-label">Цвет <input type="color" bind:value={addPanelColor} /></label>
-        <button type="button" on:click={addChartPanel}>+ Панель</button>
-      </div>
-      <div class="multi-panels">
-        {#each chartPanels as panel}
-          <div class="panel heatmap-panel" style="border-left: 4px solid {panel.color};">
-            <div class="panel-title heatmap-panel-title">
-              <span>{panel.timeframe}</span>
-              <div class="panel-actions">
-                <button type="button" class="small" on:click={() => panelGoLive(panel.id)}>Live</button>
-                <button type="button" class="small" on:click={() => removeChartPanel(panel.id)}>×</button>
-              </div>
-            </div>
-            <Heatmap
-              slices={heatmapForWindow(panel.windowStart, panel.windowEnd)}
-              windowStart={panel.windowStart}
-              windowEnd={panel.windowEnd}
-              onTimeWindowChange={(s, e) => setPanelTimeWindow(panel.id, s, e)}
-            />
-          </div>
-        {/each}
-      </div>
-      <div class="panel footprint-row">
-        <div class="panel-title">Footprint</div>
-        <Footprint bars={viewFootprint} />
-      </div>
-    </main>
-    <aside class="right panel" style="width: 260px;">
-      <div class="panel-title">Tape · {symbol}</div>
-      <Tape trades={viewTrades} />
-      <div class="panel-title" style="margin-top: 8px;">Events</div>
-      <Events items={viewEvents} />
+      <DomAligned
+        data={dom}
+        priceMin={chartScale.priceMin}
+        priceMax={chartScale.priceMax}
+        plotH={chartScale.plotH}
+        lastPrice={lastPrice}
+        depth={domDepth}
+        width={200}
+      />
     </aside>
   </div>
 {:else if activeTab === 'Dashboard'}
@@ -638,12 +539,17 @@
   .layout { display: flex; flex: 1; min-height: 0; }
   .layout.resizing { user-select: none; }
   .layout.single { padding: 8px; }
+  .layout-unified { align-items: stretch; }
   .left { flex: 0 0 auto; border-right: none; overflow: auto; min-width: 120px; }
+  .panel-left-unified { display: flex; flex-direction: column; overflow-y: auto; }
   .resizer { width: 6px; flex-shrink: 0; cursor: col-resize; background: var(--border); }
   .resizer:hover { background: var(--accent); }
   .dom-title { display: flex; justify-content: space-between; align-items: center; }
   .depth-select { padding: 2px 4px; font-size: 10px; background: #020202; border: 1px solid var(--border-strong); color: var(--text); }
   .center { flex: 1; min-width: 0; display: flex; flex-direction: column; overflow: hidden; }
+  .center-unified { display: flex; flex-direction: column; min-height: 0; }
+  .center-unified :global(.wrap) { flex: 1; min-height: 200px; }
+  .panel-right-unified { display: flex; flex-direction: column; overflow: hidden; }
   .footprint-row { flex: 0 0 140px; min-height: 120px; overflow: auto; }
   .right { border-left: 1px solid var(--border); overflow: auto; display: flex; flex-direction: column; }
   .dot { width: 8px; height: 8px; border-radius: 50%; background: #666; }
