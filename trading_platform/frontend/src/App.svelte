@@ -6,8 +6,11 @@
   import Events from './components/Events.svelte'
   import TrendAI from './components/TrendAI.svelte'
   import TrendAICompact from './components/TrendAICompact.svelte'
+  import MambaSignal from './components/MambaSignal.svelte'
+  import SignalStrip from './components/SignalStrip.svelte'
+  import MLLabDashboard from './components/MLLabDashboard.svelte'
   import ChartHeatmapBubbles from './components/ChartHeatmapBubbles.svelte'
-  import { wsUrl, fetchBybitSymbols, fetchKline, fetchImbalance, uploadSnapshot, fetchAiStatus, type Candle } from './lib/api'
+  import { wsUrl, fetchBybitSymbols, fetchKline, fetchImbalance, fetchMambaSignal, uploadSnapshot, fetchAiStatus, type Candle, type MambaSignalData } from './lib/api'
   import { formatTime, formatPrice } from './lib/format'
   import Dashboard from './components/Dashboard.svelte'
 
@@ -90,6 +93,8 @@
     : chartScale
   let bubbleMode: 'off' | 'candles' | 'trades' = 'candles'
   let imbalanceCurrent: { imbalance_pct: number } | null = null
+  let mambaSignal: MambaSignalData = null
+  const MAMBA_POLL_MS = 8000
   let chartHeatmapBubblesRef: import('./components/ChartHeatmapBubbles.svelte').default | null = null
   let firstChartRef: import('./components/ChartHeatmapBubbles.svelte').default | null = null
   $: chartHeatmapBubblesRef = firstChartRef
@@ -327,12 +332,21 @@
     }
   }
 
+  async function loadMambaSignal() {
+    try {
+      mambaSignal = await fetchMambaSignal(exchange, symbol)
+    } catch {
+      mambaSignal = null
+    }
+  }
+
   function handleExchangeChange() {
     isLive = true
     connect()
     loadSymbols()
     loadCandles()
     loadImbalance()
+    loadMambaSignal()
   }
 
   function applySymbol(next: string) {
@@ -343,6 +357,7 @@
     connect()
     loadCandles()
     loadImbalance()
+    loadMambaSignal()
   }
 
   function onSymbolKeydown(e: KeyboardEvent) {
@@ -360,6 +375,7 @@
   }
 
   let imbalanceInterval: ReturnType<typeof setInterval> | null = null
+  let mambaInterval: ReturnType<typeof setInterval> | null = null
   async function loadAiStatus() {
     try {
       const st = await fetchAiStatus()
@@ -374,17 +390,20 @@
     loadSymbols()
     loadCandles()
     loadImbalance()
+    loadMambaSignal()
     loadAiStatus()
     window.addEventListener('click', handleClickOutside)
     imbalanceInterval = setInterval(() => {
       if (activeTab === 'Flow') loadImbalance()
     }, 2000)
+    mambaInterval = setInterval(loadMambaSignal, MAMBA_POLL_MS)
     snapshotIntervalId = setInterval(() => captureAndUploadSnapshot('timer'), SNAPSHOT_INTERVAL_MS)
   })
   onDestroy(() => {
     if (ws) ws.close()
     window.removeEventListener('click', handleClickOutside)
     if (imbalanceInterval) clearInterval(imbalanceInterval)
+    if (mambaInterval) clearInterval(mambaInterval)
     if (snapshotIntervalId) clearInterval(snapshotIntervalId)
   })
 </script>
@@ -472,6 +491,16 @@
       {/if}
     </div>
   </div>
+</div>
+
+<div class="signal-strip-wrap">
+  <SignalStrip
+    lastPrice={lastPrice}
+    imbalance={imbalanceCurrent}
+    mambaSignal={mambaSignal}
+    trendScores={trendScores}
+    ruleSignals={ruleSignals}
+  />
 </div>
 
 <div class="tabs">
@@ -609,6 +638,7 @@
           width={200}
         />
       </div>
+      <MambaSignal signal={mambaSignal} />
       <TrendAICompact {trendScores} {exhaustionScores} {ruleSignals} />
     </aside>
   </div>
@@ -641,9 +671,14 @@
   </div>
 {:else if activeTab === 'MLLab'}
   <div class="layout single">
-    <div class="panel" style="flex: 1; padding: 12px;">
+    <div class="panel" style="flex: 1;">
       <div class="panel-title">ML Lab</div>
-      <div class="placeholder">Mamba и метрики будут добавлены в v2.</div>
+      <MLLabDashboard
+        mambaSignal={mambaSignal}
+        trendScores={trendScores}
+        exhaustionScores={exhaustionScores}
+        ruleSignals={ruleSignals}
+      />
     </div>
   </div>
 {:else if activeTab === 'AI'}
@@ -672,6 +707,9 @@
 {/if}
 
 <style>
+  .signal-strip-wrap {
+    width: 100%;
+  }
   .topbar {
     display: grid;
     grid-template-columns: 1fr auto auto;

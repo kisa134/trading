@@ -92,6 +92,26 @@ export type SnapshotResponse = {
 
 export type AiStatusResponse = { openrouter_configured: boolean }
 
+export type MambaSignalData =
+  | { prob_up: number; prob_down: number; delta_score: number; ts: number }
+  | null
+
+export async function fetchMambaSignal(
+  exchange: string,
+  symbol: string
+): Promise<MambaSignalData> {
+  const r = await fetch(`${API_BASE}/mamba_signal/${exchange}/${symbol}`)
+  if (!r.ok || r.status === 204) return null
+  const data = await r.json()
+  if (data == null) return null
+  return {
+    prob_up: Number(data.prob_up ?? 0),
+    prob_down: Number(data.prob_down ?? 0),
+    delta_score: Number(data.delta_score ?? 0),
+    ts: Number(data.ts ?? 0),
+  }
+}
+
 export async function fetchAiStatus(): Promise<AiStatusResponse> {
   const r = await fetch(`${API_BASE}/ai/status`)
   if (!r.ok) return { openrouter_configured: false }
