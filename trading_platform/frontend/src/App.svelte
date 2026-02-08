@@ -5,9 +5,10 @@
   import Footprint from './components/Footprint.svelte'
   import Events from './components/Events.svelte'
   import TrendAI from './components/TrendAI.svelte'
+  import TrendAICompact from './components/TrendAICompact.svelte'
   import ChartHeatmapBubbles from './components/ChartHeatmapBubbles.svelte'
-  import { wsUrl, fetchBybitSymbols, fetchKline, fetchImbalance, uploadSnapshot, type Candle } from './lib/api'
-  import { formatTime } from './lib/format'
+  import { wsUrl, fetchBybitSymbols, fetchKline, fetchImbalance, uploadSnapshot, fetchAiStatus, type Candle } from './lib/api'
+  import { formatTime, formatPrice } from './lib/format'
   import Dashboard from './components/Dashboard.svelte'
 
   let exchange = 'bybit'
@@ -20,6 +21,8 @@
   let heatmapSlices: Array<{ ts: number; rows: Array<{ price: number; vol_bid: number; vol_ask: number }> }> = []
   let footprintBars: Array<{ start: number; end: number; levels: Array<{ price: number; vol_bid: number; vol_ask: number; delta: number }> }> = []
   let events: Array<{ type: string; ts: number; [k: string]: unknown }> = []
+  let openInterestList: Array<{ ts: number; open_interest: number; open_interest_value?: number }> = []
+  let liquidationsList: Array<{ ts: number; price: number; quantity: number; side: string }> = []
   let trendScores: Array<{ ts: number; trend_power: number; trend_power_delta: number }> = []
   let exhaustionScores: Array<{ ts: number; exhaustion_score: number; absorption_score: number }> = []
   let ruleSignals: Array<{ ts: number; prob_reversal_rule: number; reversal_horizon_bars: number; expected_move_range: [number, number] }> = []
@@ -38,12 +41,16 @@
     'scores',
     'exhaustion_absorption',
     'signals',
+    'open_interest',
+    'liquidations',
     'ai_response',
   ]
   const maxTrades = 200
   const maxHeatmap = 150
   const maxFootprint = 50
   const maxEvents = 100
+  const maxOi = 50
+  const maxLiquidations = 30
 
   const timeframeOptions = [
     { label: '1m', ms: 60_000 },
@@ -52,6 +59,20 @@
     { label: '1h', ms: 60 * 60_000 },
     { label: '4h', ms: 4 * 60 * 60_000 },
   ]
+  const layoutOptions: Array<{ mode: '1x1' | '1x2' | '2x1' | '2x2'; label: string }> = [
+    { mode: '1x1', label: '1×1' },
+    { mode: '1x2', label: '1×2' },
+    { mode: '2x1', label: '2×1' },
+    { mode: '2x2', label: '2×2' },
+  ]
+  const layoutCellCount: Record<string, number> = { '1x1': 1, '1x2': 2, '2x1': 2, '2x2': 4 }
+  let layoutMode: '1x1' | '1x2' | '2x1' | '2x2' = '1x1'
+  let cells: Array<{ timeframe: string }> = [{ timeframe: '5m' }]
+  $: if (layoutCellCount[layoutMode] !== cells.length) {
+    const n = layoutCellCount[layoutMode]
+    const next = Array.from({ length: n }, (_, i) => ({ timeframe: cells[i]?.timeframe ?? '5m' }))
+    cells = next
+  }
   let timeframe = '5m'
   let isLive = true
   let manualWindowStart = 0
@@ -63,14 +84,22 @@
   let menuOpen = false
 
   let chartScale = { priceMin: 0, priceMax: 1, plotH: 300 }
+  $: initialPriceRange = lastPrice != null ? 100 : 1
+  $: chartScaleFromData = lastPrice != null && chartScale.priceMin === 0 && chartScale.priceMax === 1
+    ? { priceMin: lastPrice - initialPriceRange, priceMax: lastPrice + initialPriceRange, plotH: chartScale.plotH }
+    : chartScale
   let bubbleMode: 'off' | 'candles' | 'trades' = 'candles'
   let imbalanceCurrent: { imbalance_pct: number } | null = null
   let chartHeatmapBubblesRef: import('./components/ChartHeatmapBubbles.svelte').default | null = null
+  let firstChartRef: import('./components/ChartHeatmapBubbles.svelte').default | null = null
+  $: chartHeatmapBubblesRef = firstChartRef
   let snapshotIntervalId: ReturnType<typeof setInterval> | null = null
   const SNAPSHOT_INTERVAL_MS = 20000
   const LARGE_TRADE_MULT = 2.5
   let aiResponseText = ''
   let aiResponseTs = 0
+  let openrouterConfigured: boolean | null = null
+  $: aiErrorOpenRouter = aiResponseText.startsWith('[AI error] openrouter_not_configured')
   $: lastPrice =
     trades[0]?.price ??
     (dom?.bids?.[0]?.[0] != null && dom?.asks?.[0]?.[0] != null
@@ -108,6 +137,36 @@
   }
 
   const normalizeTs = (ts: number) => (ts < 10_000_000_000 ? ts * 1000 : ts)
+
+  function aggregateCandles(candles: Candle[], tfLabel: string): Candle[] {
+    if (!candles.length || tfLabel === '1m') return candles
+    const opt = timeframeOptions.find(t => t.label === tfLabel)
+    const intervalMs = opt?.ms ?? 60_000
+    const buckets = new Map<number, Candle[]>()
+    for (const c of candles) {
+      const t = normalizeTs(c.start)
+      const bucket = Math.floor(t / intervalMs) * intervalMs
+      if (!buckets.has(bucket)) buckets.set(bucket, [])
+      buckets.get(bucket)!.push(c)
+    }
+    const out: Candle[] = []
+    for (const [bucket, group] of [...buckets.entries()].sort((a, b) => a[0] - b[0])) {
+      const first = group[0]
+      const last = group[group.length - 1]
+      const highs = group.map(x => x.high)
+      const lows = group.map(x => x.low)
+      out.push({
+        start: Math.floor(bucket / 1000),
+        open: first.open,
+        high: Math.max(...highs),
+        low: Math.min(...lows),
+        close: last.close,
+        volume: group.reduce((s, x) => s + x.volume, 0),
+        confirm: last.confirm,
+      })
+    }
+    return out.sort((a, b) => normalizeTs(a.start) - normalizeTs(b.start))
+  }
 
   $: timeframeMs = timeframeOptions.find(t => t.label === timeframe)?.ms ?? 300_000
   $: currentLatest = (() => {
@@ -219,6 +278,12 @@
         if (stream === 'signals.rule_reversal') {
           ruleSignals = [...ruleSignals, data].slice(-200)
         }
+        if (stream === 'open_interest' && data?.open_interest != null) {
+          openInterestList = [...openInterestList, { ts: data.ts || 0, open_interest: Number(data.open_interest), open_interest_value: data.open_interest_value != null ? Number(data.open_interest_value) : undefined }].slice(-maxOi)
+        }
+        if (stream === 'liquidations' && data?.price != null) {
+          liquidationsList = [{ ts: data.ts || 0, price: Number(data.price), quantity: Number(data.quantity ?? 0), side: String(data.side ?? '') }, ...liquidationsList].slice(0, maxLiquidations)
+        }
         if (stream === 'ai_response' && data?.text != null) {
           aiResponseText = data.text
           aiResponseTs = Date.now()
@@ -295,11 +360,21 @@
   }
 
   let imbalanceInterval: ReturnType<typeof setInterval> | null = null
+  async function loadAiStatus() {
+    try {
+      const st = await fetchAiStatus()
+      openrouterConfigured = st.openrouter_configured
+    } catch {
+      openrouterConfigured = false
+    }
+  }
+
   onMount(() => {
     connect()
     loadSymbols()
     loadCandles()
     loadImbalance()
+    loadAiStatus()
     window.addEventListener('click', handleClickOutside)
     imbalanceInterval = setInterval(() => {
       if (activeTab === 'Flow') loadImbalance()
@@ -356,6 +431,18 @@
     </div>
   </div>
   <div class="panel control-panel timeframe-panel">
+    <div class="panel-title">Раскладка</div>
+    <div class="chip-row">
+      {#each layoutOptions as lo}
+        <button
+          type="button"
+          class:active={layoutMode === lo.mode}
+          on:click={() => (layoutMode = lo.mode)}
+        >
+          {lo.label}
+        </button>
+      {/each}
+    </div>
     <div class="panel-title">Timeframe</div>
     <div class="chip-row">
       {#each timeframeOptions as tf}
@@ -406,10 +493,29 @@
       <div class="tape-wrap"><Tape trades={viewTrades} /></div>
       <div class="panel-title" style="margin-top: 8px;">Footprint</div>
       <div class="footprint-wrap"><Footprint bars={viewFootprint} /></div>
+      <div class="panel-title" style="margin-top: 8px;">OI · Liquidations</div>
+      <div class="oi-liq-wrap">
+        <div class="oi-row">
+          <span class="oi-label">OI</span>
+          <span class="oi-value">{openInterestList.length ? formatPrice(openInterestList[openInterestList.length - 1].open_interest, 0) : '—'}</span>
+        </div>
+        <div class="liq-list">
+          {#each liquidationsList.slice(0, 8) as liq}
+            <div class="liq-item" class:buy={liq.side?.toLowerCase() === 'buy'} class:sell={liq.side?.toLowerCase() === 'sell'}>
+              <span>{formatPrice(liq.price)}</span>
+              <span>{liq.quantity.toFixed(2)}</span>
+              <span>{liq.side || '—'}</span>
+            </div>
+          {/each}
+          {#if liquidationsList.length === 0}
+            <div class="liq-empty">—</div>
+          {/if}
+        </div>
+      </div>
     </aside>
     <main class="center panel center-unified">
       <div class="panel-title chart-title-row">
-        <span>Heatmap + Volume · {symbol} · {timeframe} · {isLive ? 'Live' : 'Paused'}</span>
+        <span>Heatmap + Volume · {symbol} · {isLive ? 'Live' : 'Paused'}</span>
         <button type="button" class="ai-snapshot-btn-inline" on:click={() => captureAndUploadSnapshot('manual')} title="Отправить снимок ИИ">Снимок для ИИ</button>
         <span class="imbalance-indicator" class:positive={imbalanceCurrent != null && imbalanceCurrent.imbalance_pct > 0} class:negative={imbalanceCurrent != null && imbalanceCurrent.imbalance_pct < 0}>
           {imbalanceCurrent != null ? `Imbalance: ${imbalanceCurrent.imbalance_pct >= 0 ? '+' : ''}${imbalanceCurrent.imbalance_pct.toFixed(1)}%` : 'Imbalance: —'}
@@ -420,39 +526,88 @@
           <option value="trades">По сделкам</option>
         </select>
       </div>
-      <ChartHeatmapBubbles
-        bind:this={chartHeatmapBubblesRef}
-        slices={viewHeatmap}
-        candles={candles}
-        trades={viewTrades}
-        {bubbleMode}
-        {windowStart}
-        {windowEnd}
-        onTimeWindowChange={setTimeWindow}
-        onScaleChange={(info) => {
-          chartScale = { priceMin: info.priceMin, priceMax: info.priceMax, plotH: info.plotH }
-        }}
-      />
+      <div class="chart-grid chart-grid-{layoutMode}">
+        {#each cells as cell, i}
+          <div class="chart-cell">
+            <div class="chart-cell-header">
+              <select
+                class="cell-tf-select"
+                bind:value={cell.timeframe}
+                title="Таймфрейм ячейки"
+              >
+                {#each timeframeOptions as tf}
+                  <option value={tf.label}>{tf.label}</option>
+                {/each}
+              </select>
+              <span class="cell-label">{cell.timeframe}</span>
+            </div>
+            {#if i === 0}
+              <ChartHeatmapBubbles
+                bind:this={firstChartRef}
+                slices={viewHeatmap}
+                candles={aggregateCandles(candles, cell.timeframe)}
+                trades={viewTrades}
+                {bubbleMode}
+                windowStart={windowStart}
+                windowEnd={windowEnd}
+                {lastPrice}
+                onTimeWindowChange={setTimeWindow}
+                onScaleChange={(info) => {
+                  chartScale = { priceMin: info.priceMin, priceMax: info.priceMax, plotH: info.plotH }
+                }}
+              />
+            {:else}
+              <ChartHeatmapBubbles
+                slices={viewHeatmap}
+                candles={aggregateCandles(candles, cell.timeframe)}
+                trades={viewTrades}
+                {bubbleMode}
+                windowStart={windowStart}
+                windowEnd={windowEnd}
+                {lastPrice}
+                onTimeWindowChange={setTimeWindow}
+                onScaleChange={() => {}}
+              />
+            {/if}
+          </div>
+        {/each}
+      </div>
+      <div class="flow-ai-panel">
+        <div class="panel-title">ИИ-анализ</div>
+        {#if openrouterConfigured === false || aiErrorOpenRouter}
+          <div class="ai-hint-warn">
+            Добавьте OPENROUTER_API_KEY в Render (Environment Group для trading-api).
+          </div>
+        {:else if aiResponseTs > 0}
+          <div class="ai-meta">Обновлено: {formatTime(aiResponseTs)}</div>
+          <div class="ai-text">{aiResponseText}</div>
+        {:else}
+          <div class="ai-hint">Ответы приходят после снимка. Кнопка «Снимок для ИИ» выше.</div>
+        {/if}
+      </div>
     </main>
     <aside class="right panel panel-right-unified" style="width: 220px;">
-      <div class="panel-title dom-title">
-        <span>DOM · {symbol}</span>
-        <select class="depth-select" value={domDepth} on:change={setDomDepthFromSelect}>
-          <option value={5}>5</option>
-          <option value={10}>10</option>
-          <option value={20}>20</option>
-          <option value={50}>50</option>
-        </select>
+      <div class="right-top">
+        <div class="panel-title dom-title">
+          <span>DOM · {symbol}</span>
+          <select class="depth-select" value={domDepth} on:change={setDomDepthFromSelect}>
+            <option value={5}>5</option>
+            <option value={10}>10</option>
+            <option value={20}>20</option>
+            <option value={50}>50</option>
+          </select>
+        </div>
+        <DomAligned
+          data={dom}
+          priceMin={chartScaleFromData.priceMin}
+          priceMax={chartScaleFromData.priceMax}
+          plotH={chartScaleFromData.plotH}
+          lastPrice={lastPrice}
+          depth={domDepth}
+          width={200}
+        />
       </div>
-      <DomAligned
-        data={dom}
-        priceMin={chartScale.priceMin}
-        priceMax={chartScale.priceMax}
-        plotH={chartScale.plotH}
-        lastPrice={lastPrice}
-        depth={domDepth}
-        width={200}
-      />
+      <TrendAICompact {trendScores} {exhaustionScores} {ruleSignals} />
     </aside>
   </div>
 {:else if activeTab === 'Dashboard'}
@@ -658,6 +813,15 @@
   .panel-left-unified .events-wrap { max-height: 180px; overflow-y: auto; min-height: 0; }
   .panel-left-unified .tape-wrap { max-height: 220px; overflow-y: auto; min-height: 0; }
   .panel-left-unified .footprint-wrap { max-height: 200px; overflow-y: auto; min-height: 0; }
+  .panel-left-unified .oi-liq-wrap { max-height: 140px; overflow-y: auto; min-height: 0; font-size: 11px; }
+  .oi-row { display: flex; justify-content: space-between; padding: 4px 0; }
+  .oi-label { color: var(--text-muted); }
+  .oi-value { font-variant-numeric: tabular-nums; }
+  .liq-list { display: flex; flex-direction: column; gap: 2px; margin-top: 4px; }
+  .liq-item { display: flex; justify-content: space-between; gap: 6px; padding: 2px 4px; background: #080808; font-variant-numeric: tabular-nums; font-size: 10px; }
+  .liq-item.buy { border-left: 2px solid var(--buy); }
+  .liq-item.sell { border-left: 2px solid var(--sell); }
+  .liq-empty { color: var(--text-muted); padding: 4px; }
   .resizer { width: 6px; flex-shrink: 0; cursor: col-resize; background: var(--border); }
   .resizer:hover { background: var(--accent); }
   .dom-title { display: flex; justify-content: space-between; align-items: center; }
@@ -670,7 +834,17 @@
   .center { flex: 1; min-width: 0; display: flex; flex-direction: column; overflow: hidden; }
   .center-unified { display: flex; flex-direction: column; min-height: 0; }
   .center-unified :global(.wrap) { flex: 1; min-height: 200px; }
+  .chart-grid { display: grid; flex: 1; min-height: 0; gap: 4px; }
+  .chart-grid-1x1 { grid-template-columns: 1fr; grid-template-rows: 1fr; }
+  .chart-grid-1x2 { grid-template-columns: 1fr; grid-template-rows: 1fr 1fr; }
+  .chart-grid-2x1 { grid-template-columns: 1fr 1fr; grid-template-rows: 1fr; }
+  .chart-grid-2x2 { grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr; }
+  .chart-cell { display: flex; flex-direction: column; min-height: 0; min-width: 0; }
+  .chart-cell-header { display: flex; align-items: center; gap: 6px; padding: 2px 4px; font-size: 10px; flex-shrink: 0; }
+  .cell-tf-select { padding: 2px 4px; font-size: 10px; background: #020202; border: 1px solid var(--border-strong); color: var(--text); }
+  .cell-label { color: var(--text-muted); }
   .panel-right-unified { display: flex; flex-direction: column; overflow: hidden; }
+  .right-top { flex: 0 0 auto; }
   .footprint-row { flex: 0 0 140px; min-height: 120px; overflow: auto; }
   .right { border-left: 1px solid var(--border); overflow: auto; display: flex; flex-direction: column; }
   .dot { width: 8px; height: 8px; border-radius: 50%; background: #666; }
@@ -707,4 +881,15 @@
   .ai-response-box { flex: 1; min-height: 120px; border: 1px solid var(--border); background: #080808; padding: 12px; border-radius: 4px; overflow-y: auto; }
   .ai-meta { font-size: 10px; color: var(--text-muted); margin-bottom: 8px; }
   .ai-text { white-space: pre-wrap; word-break: break-word; font-size: 13px; line-height: 1.5; }
+  .flow-ai-panel {
+    flex-shrink: 0;
+    border-top: 1px solid var(--border);
+    padding: 8px;
+    max-height: 180px;
+    overflow-y: auto;
+    background: #080808;
+  }
+  .flow-ai-panel .panel-title { margin-bottom: 6px; font-size: 11px; color: var(--text-muted); }
+  .ai-hint-warn { color: var(--sell); font-size: 12px; }
+  .flow-ai-panel .ai-hint { color: var(--text-muted); font-size: 12px; }
 </style>

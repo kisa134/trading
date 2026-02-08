@@ -27,7 +27,7 @@ async def openrouter_chat(
 ) -> str:
     """OpenRouter chat completions (no stream). Returns assistant text."""
     if not OPENROUTER_API_KEY:
-        raise RuntimeError("OPENROUTER_API_KEY not set")
+        raise RuntimeError("openrouter_not_configured: OPENROUTER_API_KEY not set")
     url = f"{OPENROUTER_BASE}/chat/completions"
     headers = {
         "Authorization": f"Bearer {OPENROUTER_API_KEY}",
@@ -116,7 +116,7 @@ async def gemini_multimodal(
 async def deepseek_metrics_plan(metrics_json: str, system_prompt: str | None = None) -> str:
     """DeepSeek V3 via OpenRouter: analyze Delta, OI, Funding, liquidations; return trade plan."""
     if not OPENROUTER_API_KEY:
-        raise RuntimeError("OPENROUTER_API_KEY not set")
+        raise RuntimeError("openrouter_not_configured: OPENROUTER_API_KEY not set")
     default_system = (
         "You are a quantitative analyst. Given JSON with market metrics (delta, open interest, "
         "funding rate, liquidations), produce a short trade plan: bias, key levels, risk."

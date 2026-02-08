@@ -144,10 +144,39 @@ services:
     envVars:
       - fromGroup: trading-env-5mux
 
+  - type: worker
+    name: cold-writer
+    env: python
+    rootDir: trading_platform
+    buildCommand: pip install -r requirements.txt
+    startCommand: python -m storage.cold --redis $REDIS_URL
+    envVars:
+      - fromGroup: trading-env-5mux
+
+  - type: worker
+    name: celery-worker
+    env: python
+    rootDir: trading_platform
+    buildCommand: pip install -r requirements.txt
+    startCommand: celery -A celery_app worker -l info
+    envVars:
+      - fromGroup: trading-env-5mux
+
+  - type: worker
+    name: celery-beat
+    env: python
+    rootDir: trading_platform
+    buildCommand: pip install -r requirements.txt
+    startCommand: celery -A celery_app beat -l info
+    envVars:
+      - fromGroup: trading-env-5mux
+
 envVarGroups:
   - name: trading-env-5mux
     envVars:
       - key: REDIS_URL
         sync: false
       - key: OPENROUTER_API_KEY
+        sync: false
+      - key: COLD_STORAGE_URL
         sync: false

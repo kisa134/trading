@@ -18,6 +18,7 @@
   export let showAsk = true
   export let showPriceLabels = true
   export let showTimeLabels = true
+  export let lastPrice: number | null = null
 
   let container: HTMLDivElement
   let heatmapCanvas: HTMLCanvasElement
@@ -305,7 +306,10 @@
       if (heatmapCtx && heatmapCanvas) drawHeatmap()
       if (bubblesCtx && bubblesCanvas) drawBubbles()
       const hasData = rowsByTs.length > 0 || viewCandles.length > 0 || viewTrades.length > 0
-      if (plotH > 0 && hasData) notifyScale()
+      if (plotH > 0) {
+        if (hasData) notifyScale()
+        else if (lastPrice != null) onScaleChange({ priceMin: lastPrice - 100, priceMax: lastPrice + 100, plotH })
+      }
     })
   }
 

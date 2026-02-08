@@ -15,9 +15,10 @@
   const dpr = typeof window !== 'undefined' ? Math.min(2, window.devicePixelRatio || 1) : 1
 
   const ROW_HEIGHT = 20
-  const DOM_REDRAW_THROTTLE_MS = 120
+  const DOM_REDRAW_THROTTLE_MS = 80
   let lastDrawTime = 0
   let throttleTimer: ReturnType<typeof setTimeout> | null = null
+  let lastScaleKey = ''
 
   $: priceRange = priceMax - priceMin || 1
   $: mid = lastPrice ?? (data?.bids?.[0]?.[0] != null && data?.asks?.[0]?.[0] != null
@@ -122,7 +123,14 @@
     })
   }
 
-  function scheduleDraw() {
+  function scheduleDraw(forceImmediate = false) {
+    const scaleKey = `${priceMin}-${priceMax}-${plotH}`
+    if (forceImmediate || scaleKey !== lastScaleKey) {
+      lastScaleKey = scaleKey
+      lastDrawTime = Date.now()
+      draw()
+      return
+    }
     const now = Date.now()
     if (now - lastDrawTime < DOM_REDRAW_THROTTLE_MS) {
       if (throttleTimer == null) {
@@ -157,7 +165,8 @@
   $: if (canvas && ctx && (data || lastPrice != null)) {
     const cw = Math.floor(width * dpr)
     const ch = Math.floor(plotH * dpr)
-    if (canvas.width !== cw || canvas.height !== ch) {
+    const scaleChanged = canvas.width !== cw || canvas.height !== ch
+    if (scaleChanged) {
       canvas.width = cw
       canvas.height = ch
       canvas.style.width = width + 'px'
@@ -165,7 +174,7 @@
       ctx.setTransform(1, 0, 0, 1, 0, 0)
       ctx.scale(dpr, dpr)
     }
-    scheduleDraw()
+    scheduleDraw(scaleChanged)
   }
 </script>
 

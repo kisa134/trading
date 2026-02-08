@@ -92,6 +92,11 @@ async def send_ai_response(exchange: str, symbol: str, text: str):
 async def startup():
     global _broadcast_task, _ai_controller_task
     await get_redis()
+    try:
+        from services.ai.config import OPENROUTER_API_KEY
+        print(f"[startup] OPENROUTER_API_KEY set: {'yes' if OPENROUTER_API_KEY else 'no'}")
+    except Exception:
+        print("[startup] OPENROUTER_API_KEY check skipped (config not loaded)")
     _broadcast_task = asyncio.create_task(broadcast_worker())
     try:
         from services.market_context_builder import get_or_build_context
@@ -247,6 +252,13 @@ async def websocket_endpoint(
 @app.get("/health")
 async def health():
     return {"status": "ok"}
+
+
+@app.get("/ai/status")
+async def ai_status():
+    """Return whether OpenRouter is configured (for frontend hint). Does not expose the key."""
+    from services.ai.config import OPENROUTER_API_KEY
+    return {"openrouter_configured": bool(OPENROUTER_API_KEY)}
 
 
 # --- AI snapshot (visual capture for LLM) ---

@@ -8,6 +8,7 @@ import json
 import argparse
 import os
 import sys
+import time
 from collections import defaultdict
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
@@ -187,7 +188,9 @@ def main():
     parser.add_argument("--cold", default=os.environ.get("COLD_STORAGE_URL", ""), help="PostgreSQL URL for cold storage")
     args = parser.parse_args()
     if not args.cold:
-        print("[cold] COLD_STORAGE_URL not set; exit")
+        print("[cold] COLD_STORAGE_URL not set; idling (set env to enable)")
+        while True:
+            time.sleep(3600)
         return
     asyncio.run(run_cold_writer(args.redis, args.cold))
 

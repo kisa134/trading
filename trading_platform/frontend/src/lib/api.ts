@@ -90,6 +90,14 @@ export type SnapshotResponse = {
   ts: number
 }
 
+export type AiStatusResponse = { openrouter_configured: boolean }
+
+export async function fetchAiStatus(): Promise<AiStatusResponse> {
+  const r = await fetch(`${API_BASE}/ai/status`)
+  if (!r.ok) return { openrouter_configured: false }
+  return r.json()
+}
+
 export async function uploadSnapshot(payload: SnapshotPayload): Promise<SnapshotResponse> {
   const r = await fetch(`${API_BASE}/ai/snapshot`, {
     method: 'POST',

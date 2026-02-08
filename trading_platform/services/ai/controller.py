@@ -65,7 +65,11 @@ async def run_controller(get_redis, get_or_build_context, route_multimodal, send
                     try:
                         text = await route_multimodal(context, image_base64, cached_content_name=cached_name)
                     except Exception as e:
-                        text = f"[AI error] {e!s}"
+                        err_msg = str(e)
+                        if "openrouter_not_configured" in err_msg:
+                            text = "[AI error] openrouter_not_configured"
+                        else:
+                            text = f"[AI error] {e!s}"
                     await send_ai_response(exchange, symbol, text)
         except asyncio.CancelledError:
             break
