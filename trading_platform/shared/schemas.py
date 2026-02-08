@@ -35,6 +35,9 @@ ABSORPTION_SCORE_FIELD = "absorption_score"
 PROB_REVERSAL_FIELD = "prob_reversal_rule"
 REVERSAL_HORIZON_FIELD = "reversal_horizon_bars"
 EXPECTED_RANGE_FIELD = "expected_move_range"
+OPEN_INTEREST_FIELD = "open_interest"
+OPEN_INTEREST_VALUE_FIELD = "open_interest_value"
+QUANTITY_FIELD = "quantity"
 
 
 def orderbook_event(exchange: str, symbol: str, event_type: str, ts: int, bids: list, asks: list, update_id=None) -> dict:
@@ -125,4 +128,39 @@ def rule_reversal_event(
         PROB_REVERSAL_FIELD: prob_reversal_rule,
         REVERSAL_HORIZON_FIELD: reversal_horizon_bars,
         EXPECTED_RANGE_FIELD: expected_move_range,
+    }
+
+
+def open_interest_event(
+    exchange: str,
+    symbol: str,
+    ts: int,
+    open_interest: float,
+    open_interest_value: float | None = None,
+) -> dict:
+    return {
+        EXCHANGE_FIELD: exchange,
+        SYMBOL_FIELD: symbol,
+        TS_FIELD: ts,
+        OPEN_INTEREST_FIELD: open_interest,
+        **({} if open_interest_value is None else {OPEN_INTEREST_VALUE_FIELD: open_interest_value}),
+    }
+
+
+def liquidation_event(
+    exchange: str,
+    symbol: str,
+    ts: int,
+    price: float,
+    quantity: float,
+    side: str,
+) -> dict:
+    """Side: Buy = liquidation of Long, Sell = liquidation of Short."""
+    return {
+        EXCHANGE_FIELD: exchange,
+        SYMBOL_FIELD: symbol,
+        TS_FIELD: ts,
+        PRICE_FIELD: price,
+        QUANTITY_FIELD: quantity,
+        SIDE_FIELD: side,
     }

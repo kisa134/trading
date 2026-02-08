@@ -10,6 +10,8 @@ STREAM_EVENTS = "events"
 STREAM_SCORES_TREND = "scores.trend"
 STREAM_SCORES_EXHAUSTION = "scores.exhaustion"
 STREAM_SIGNALS_RULE_REVERSAL = "signals.rule_reversal"
+STREAM_OPEN_INTEREST = "open_interest"
+STREAM_LIQUIDATIONS = "liquidations"
 
 REDIS_KEY_DOM = "dom:{exchange}:{symbol}"
 REDIS_KEY_ORDERBOOK_SLICES = "orderbook_slices:{exchange}:{symbol}"
@@ -26,6 +28,11 @@ REDIS_KEY_SCORE_VOLUME = "scores.volume:{exchange}:{symbol}"
 REDIS_KEY_SCORE_ORDERBOOK = "scores.orderbook:{exchange}:{symbol}"
 REDIS_KEY_IMBALANCE = "imbalance:{exchange}:{symbol}"
 REDIS_KEY_IMBALANCE_HISTORY = "imbalance_history:{exchange}:{symbol}"
+REDIS_KEY_OI = "oi:{exchange}:{symbol}"
+REDIS_KEY_LIQUIDATIONS = "liquidations:{exchange}:{symbol}"
+
+OI_MAXLEN = 500
+LIQUIDATIONS_MAXLEN = 500
 
 # AI terminal: snapshots, context cache, predictions hot cache, Mamba anomalies
 STREAM_AI_SNAPSHOTS = "ai:snapshots"

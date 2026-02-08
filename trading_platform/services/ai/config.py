@@ -25,6 +25,12 @@ MODELS: list[ModelEntry] = [
 # Fallback for multimodal when primary fails (e.g. Gemini -> GPT-4o vision)
 MULTIMODAL_FALLBACK_MODEL = "openai/gpt-4o"
 
+# DeepSeek V3 for metrics/trade plan (OpenRouter)
+DEEPSEEK_METRICS_MODEL = os.environ.get("DEEPSEEK_METRICS_MODEL", "deepseek/deepseek-chat-v3-0324")
+
+# Optional: Visual Mamba service URL (Docker) for tick anomaly score
+VMAMBA_SERVICE_URL = os.environ.get("VMAMBA_SERVICE_URL", "")
+
 OPENROUTER_BASE = "https://openrouter.ai/api/v1"
 OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY", "")
 GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY", "")

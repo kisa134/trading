@@ -9,7 +9,14 @@ from typing import Any
 
 import httpx
 
-from .config import OPENROUTER_BASE, OPENROUTER_API_KEY, GOOGLE_API_KEY, MULTIMODAL_FALLBACK_MODEL
+from .config import (
+    OPENROUTER_BASE,
+    OPENROUTER_API_KEY,
+    GOOGLE_API_KEY,
+    MULTIMODAL_FALLBACK_MODEL,
+    DEEPSEEK_METRICS_MODEL,
+    VMAMBA_SERVICE_URL,
+)
 
 
 async def openrouter_chat(
@@ -104,3 +111,35 @@ async def gemini_multimodal(
         parts.append({"inlineData": {"mimeType": "image/jpeg", "data": image_base64}})
     contents = [{"role": "user", "parts": parts}]
     return await gemini_generate_content(contents, model=model, cached_content_name=cached_content_name)
+
+
+async def deepseek_metrics_plan(metrics_json: str, system_prompt: str | None = None) -> str:
+    """DeepSeek V3 via OpenRouter: analyze Delta, OI, Funding, liquidations; return trade plan."""
+    if not OPENROUTER_API_KEY:
+        raise RuntimeError("OPENROUTER_API_KEY not set")
+    default_system = (
+        "You are a quantitative analyst. Given JSON with market metrics (delta, open interest, "
+        "funding rate, liquidations), produce a short trade plan: bias, key levels, risk."
+    )
+    messages: list[dict[str, Any]] = []
+    messages.append({"role": "system", "content": system_prompt or default_system})
+    messages.append({"role": "user", "content": f"Analyze and give a trade plan:\n{metrics_json}"})
+    return await openrouter_chat(messages, model_id=DEEPSEEK_METRICS_MODEL, max_tokens=1024)
+
+
+async def vmamba_tick_anomaly(trades_window: list[dict]) -> float | None:
+    """Optional: call Visual Mamba service (Docker) for anomaly score on tick window. Returns 0..1 or None."""
+    if not VMAMBA_SERVICE_URL:
+        return None
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            r = await client.post(
+                f"{VMAMBA_SERVICE_URL.rstrip('/')}/score",
+                json={"trades": trades_window},
+            )
+            if r.status_code != 200:
+                return None
+            data = r.json()
+            return float(data.get("anomaly_score", data.get("score", 0)))
+    except Exception:
+        return None

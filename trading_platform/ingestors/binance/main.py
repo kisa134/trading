@@ -14,11 +14,17 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..",
 import redis.asyncio as redis
 import websockets
 
-from shared.schemas import orderbook_event, trade_event
-from shared.streams import STREAM_ORDERBOOK_UPDATES, STREAM_TRADES
+from shared.schemas import orderbook_event, trade_event, liquidation_event, open_interest_event
+from shared.streams import (
+    STREAM_ORDERBOOK_UPDATES,
+    STREAM_TRADES,
+    STREAM_LIQUIDATIONS,
+    STREAM_OPEN_INTEREST,
+)
 
 BINANCE_WS_URL = "wss://fstream.binance.com/stream"
 BINANCE_REST_DEPTH = "https://fapi.binance.com/fapi/v1/depth"
+BINANCE_REST_OI = "https://fapi.binance.com/fapi/v1/openInterest"
 EXCHANGE = "binance"
 ORDERBOOK_LIMIT = 200
 
@@ -52,16 +58,44 @@ async def fetch_orderbook_snapshot(symbol: str, limit: int = ORDERBOOK_LIMIT) ->
     }
 
 
+async def fetch_open_interest(symbol: str) -> float | None:
+    import aiohttp
+    async with aiohttp.ClientSession() as session:
+        async with session.get(BINANCE_REST_OI, params={"symbol": symbol}) as resp:
+            if resp.status != 200:
+                return
+            data = await resp.json()
+    if "openInterest" not in data:
+        return
+    return float(data["openInterest"])
+
+
+async def oi_poller(redis_client: redis.Redis, symbol: str):
+    """Poll Binance REST open interest every 1s and push to Redis stream."""
+    while True:
+        try:
+            oi = await fetch_open_interest(symbol)
+            if oi is not None:
+                ts = int(time.time() * 1000)
+                ev = open_interest_event(EXCHANGE, symbol, ts, oi, None)
+                await redis_client.xadd(STREAM_OPEN_INTEREST, {"payload": json.dumps(ev)}, maxlen=5000)
+        except Exception:
+            pass
+        await asyncio.sleep(1)
+
+
 async def run_ingestor(redis_url: str, symbol: str):
     r = redis.from_url(redis_url, decode_responses=True)
     sym_lower = symbol.lower()
-    streams = [f"{sym_lower}@depth@100ms", f"{sym_lower}@aggTrade"]
+    streams = [f"{sym_lower}@depth@100ms", f"{sym_lower}@aggTrade", f"{sym_lower}@forceOrder"]
     ws_url = f"{BINANCE_WS_URL}?streams={'/'.join(streams)}"
 
     snap = await fetch_orderbook_snapshot(symbol)
     if snap:
         await r.xadd(STREAM_ORDERBOOK_UPDATES, {"payload": json.dumps(snap)}, maxlen=10000)
         print(f"[binance] Published initial snapshot for {symbol}")
+
+    oi_task = asyncio.create_task(oi_poller(r, symbol))
 
     async for ws in websockets.connect(ws_url, ping_interval=20, ping_timeout=20, close_timeout=5):
         try:
@@ -84,11 +118,23 @@ async def run_ingestor(redis_url: str, symbol: str):
                         continue
                     ev = trade_event(EXCHANGE, symbol, side, price, size, ts, trade_id)
                     await r.xadd(STREAM_TRADES, {"payload": json.dumps(ev)}, maxlen=50000)
+                elif f"{sym_lower}@forceOrder" in stream:
+                    ts = int(payload.get("E", time.time() * 1000))
+                    price = float(payload.get("p", 0))
+                    qty = float(payload.get("q", 0))
+                    side = "Sell" if payload.get("m") is True else "Buy"
+                    ev = liquidation_event(EXCHANGE, symbol, ts, price, qty, side)
+                    await r.xadd(STREAM_LIQUIDATIONS, {"payload": json.dumps(ev)}, maxlen=10000)
         except websockets.exceptions.ConnectionClosed as e:
             print(f"[binance] WS closed: {e}, reconnecting...")
         except Exception as e:
             print(f"[binance] Error: {e}, reconnecting...")
         await asyncio.sleep(2)
+    oi_task.cancel()
+    try:
+        await oi_task
+    except asyncio.CancelledError:
+        pass
 
 
 def main():

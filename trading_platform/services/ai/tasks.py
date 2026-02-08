@@ -90,6 +90,12 @@ async def _evaluate_outcomes_async():
                 from services.ai.experience_replay import add_experience
                 summary = f"Price at prediction: {price_at}. Actual: {actual_price}. Direction: {direction or 'n/a'}."
                 await add_experience(str(pred_id), exchange, symbol, "success", summary)
+            try:
+                from services.graph.writer import write_outcome
+                if outcome == "success":
+                    write_outcome(str(pred_id), outcome, actual_price, None)
+            except Exception:
+                pass
         return {"ok": 1, "updated": updated}
     finally:
         await conn.close()
@@ -188,6 +194,11 @@ async def _run_self_reflection_async(prediction_id: str):
                 reflection_text,
                 "deepseek-r1",
             )
+        try:
+            from services.graph.writer import write_outcome
+            write_outcome(prediction_id, "fail", float(row["actual_price"]), reflection_text)
+        except Exception:
+            pass
         return {"ok": 1}
     finally:
         await conn.close()

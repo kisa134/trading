@@ -147,13 +147,15 @@
     heatmapCtx.fillRect(0, 0, w, h)
     if (!heatmapPrices.length || !rowsByTs.length) return
 
-    const nX = rowsByTs.length
+    const maxCols = Math.min(rowsByTs.length, Math.max(1, Math.floor(plotW)))
+    const slicesToDraw = rowsByTs.slice(-maxCols)
+    const nX = slicesToDraw.length
     const nY = heatmapPrices.length
-    const cellW = Math.max(2, plotW / nX)
+    const cellW = Math.max(1, plotW / nX)
     const volScale = 1 / Math.log(maxVolHeat + 1)
 
     for (let xi = 0; xi < nX; xi++) {
-      const slice = rowsByTs[xi]
+      const slice = slicesToDraw[xi]
       const rowMap = new Map(slice.rows.map((r) => [r.price, r]))
       for (let yi = 0; yi < nY; yi++) {
         const price = heatmapPrices[yi]
@@ -193,7 +195,7 @@
         const xStep = Math.max(1, Math.floor(nX / 4))
         for (let i = 0; i <= nX; i += xStep) {
           const xi = Math.min(i, nX - 1)
-          const ts = rowsByTs[xi]?.ts
+          const ts = slicesToDraw[xi]?.ts
           if (ts == null) continue
           const x = paddingLeft + xi * cellW + cellW / 2
           heatmapCtx.fillText(formatTime(ts), x, h - paddingBottom + 4)
@@ -302,7 +304,8 @@
       pendingRedraw = false
       if (heatmapCtx && heatmapCanvas) drawHeatmap()
       if (bubblesCtx && bubblesCanvas) drawBubbles()
-      if (plotH > 0) notifyScale()
+      const hasData = rowsByTs.length > 0 || viewCandles.length > 0 || viewTrades.length > 0
+      if (plotH > 0 && hasData) notifyScale()
     })
   }
 

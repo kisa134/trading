@@ -31,6 +31,7 @@
   const channels = [
     'orderbook_realtime',
     'trades_realtime',
+    'kline',
     'heatmap_stream',
     'footprint_stream',
     'events_stream',
@@ -119,10 +120,10 @@
       lastFootprint?.end ?? lastFootprint?.start,
       lastTrade,
       lastEvent,
-      Date.now(),
-    ]
-    const normalized = candidates.filter(Boolean).map((t: number) => normalizeTs(t))
-    return normalized.length ? Math.max(...normalized) : Date.now()
+    ].filter(Boolean)
+    const normalized = candidates.map((t: number) => normalizeTs(t))
+    if (normalized.length) return Math.max(...normalized)
+    return Date.now()
   })()
   $: windowStart = isLive ? currentLatest - timeframeMs : manualWindowStart
   $: windowEnd = isLive ? currentLatest : manualWindowEnd
@@ -176,6 +177,23 @@
             const avg = recent.length ? recent.reduce((a: number, b: number) => a + b, 0) / recent.length : 0
             if (avg > 0 && size >= avg * LARGE_TRADE_MULT) captureAndUploadSnapshot('volume_spike')
           }
+          return
+        }
+        if (stream === 'kline' && data?.start != null) {
+          const start = data.start
+          const c = {
+            start,
+            open: Number(data.open ?? 0),
+            high: Number(data.high ?? 0),
+            low: Number(data.low ?? 0),
+            close: Number(data.close ?? 0),
+            volume: Number(data.volume ?? 0),
+            confirm: Boolean(data.confirm),
+          }
+          const idx = candles.findIndex((x) => normalizeTs(x.start) === normalizeTs(start))
+          if (idx >= 0) candles[idx] = c
+          else candles = [...candles, c].sort((a, b) => normalizeTs(a.start) - normalizeTs(b.start))
+          candles = candles.slice(-500)
           return
         }
         if (stream === 'heatmap_slices' || stream === 'heatmap_stream') {

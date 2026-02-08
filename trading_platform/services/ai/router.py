@@ -63,3 +63,8 @@ async def route_multimodal(
         })
     content.append({"type": "text", "text": text})
     return await providers.openrouter_multimodal(messages, model_id=MULTIMODAL_FALLBACK_MODEL)
+
+
+async def route_metrics_plan(metrics_json: str, system_prompt: str | None = None) -> str:
+    """Delta, OI, funding, liquidations JSON -> DeepSeek V3 trade plan."""
+    return await providers.deepseek_metrics_plan(metrics_json, system_prompt=system_prompt)

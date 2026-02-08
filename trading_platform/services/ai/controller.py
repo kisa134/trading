@@ -40,6 +40,13 @@ async def run_controller(get_redis, get_or_build_context, route_multimodal, send
                     image_base64 = await r.get(blob_key)
                     context = await get_or_build_context(r, exchange, symbol)
                     try:
+                        from services.graph.graphrag import query_similar_situations
+                        graph_ctx = query_similar_situations(exchange, symbol, limit=10)
+                        if graph_ctx:
+                            context = f"Graph memory (similar past situations):\n{graph_ctx}\n\n---\n{context}"
+                    except Exception:
+                        pass
+                    try:
                         from services.ai.experience_replay import search_few_shot
                         few_shot = await search_few_shot(exchange, symbol, limit=3)
                         if few_shot:

@@ -24,6 +24,8 @@ from shared.streams import (
     STREAM_SCORES_TREND,
     STREAM_SCORES_EXHAUSTION,
     STREAM_SIGNALS_RULE_REVERSAL,
+    STREAM_OPEN_INTEREST,
+    STREAM_LIQUIDATIONS,
     REDIS_KEY_DOM,
     REDIS_KEY_TRADES,
     REDIS_KEY_HEATMAP,
@@ -35,6 +37,8 @@ from shared.streams import (
     REDIS_KEY_SIGNALS_RULE,
     REDIS_KEY_IMBALANCE,
     REDIS_KEY_IMBALANCE_HISTORY,
+    REDIS_KEY_OI,
+    REDIS_KEY_LIQUIDATIONS,
     STREAM_AI_SNAPSHOTS,
     REDIS_KEY_AI_SNAPSHOT_BLOB,
 )
@@ -127,12 +131,15 @@ def _match(exchange: str, symbol: str, payload: dict) -> bool:
 STREAM_TO_CHANNEL = {
     STREAM_ORDERBOOK_UPDATES: "orderbook_realtime",
     STREAM_TRADES: "trades_realtime",
+    STREAM_KLINE: "kline",
     STREAM_HEATMAP_SLICES: "heatmap_stream",
     STREAM_FOOTPRINT_BARS: "footprint_stream",
     STREAM_EVENTS: "events_stream",
     STREAM_SCORES_TREND: "scores",
     STREAM_SCORES_EXHAUSTION: "exhaustion_absorption",
     STREAM_SIGNALS_RULE_REVERSAL: "signals",
+    STREAM_OPEN_INTEREST: "open_interest",
+    STREAM_LIQUIDATIONS: "liquidations",
 }
 
 
@@ -142,12 +149,15 @@ async def broadcast_worker():
     last_ids = {
         STREAM_ORDERBOOK_UPDATES: "$",
         STREAM_TRADES: "$",
+        STREAM_KLINE: "$",
         STREAM_HEATMAP_SLICES: "$",
         STREAM_FOOTPRINT_BARS: "$",
         STREAM_EVENTS: "$",
         STREAM_SCORES_TREND: "$",
         STREAM_SCORES_EXHAUSTION: "$",
         STREAM_SIGNALS_RULE_REVERSAL: "$",
+        STREAM_OPEN_INTEREST: "$",
+        STREAM_LIQUIDATIONS: "$",
     }
     while True:
         try:
@@ -303,6 +313,12 @@ async def ai_save_prediction(body: dict = Body(..., embed=False)):
         expected_range_low=expected_range_low, expected_range_high=expected_range_high,
         snapshot_ref=snapshot_ref, context_snapshot=context_snapshot, models_used=models_used,
     )
+    try:
+        from services.graph.writer import write_prediction
+        text = f"direction={direction or 'n/a'} target={target_price} range=[{expected_range_low},{expected_range_high}]"
+        write_prediction(str(prediction_id), exchange, symbol, ts_prediction, text, horizon_minutes)
+    except Exception:
+        pass
     return {"predictionId": prediction_id, "ts_prediction": ts_prediction}
 
 
@@ -441,6 +457,65 @@ async def get_kline(
             "close": float(payload.get("close", 0)),
             "volume": float(payload.get("volume", 0)),
             "confirm": bool(payload.get("confirm", False)),
+        })
+        if len(result) >= limit:
+            break
+    result.reverse()
+    return result
+
+
+@app.get("/oi/{exchange}/{symbol}")
+async def get_oi(exchange: str, symbol: str, limit: int = Query(100, le=500)):
+    """REST: last N open interest points from Redis stream."""
+    r = await get_redis()
+    messages = await r.xrevrange(STREAM_OPEN_INTEREST, count=limit)
+    result = []
+    for _mid, fields in messages or []:
+        payload_str = (fields or {}).get("payload")
+        if not payload_str:
+            continue
+        try:
+            payload = json.loads(payload_str)
+        except json.JSONDecodeError:
+            continue
+        if not _match(exchange, symbol, payload):
+            continue
+        result.append({
+            "ts": payload.get("ts"),
+            "open_interest": float(payload.get("open_interest", 0)),
+            "open_interest_value": float(payload["open_interest_value"]) if payload.get("open_interest_value") is not None else None,
+        })
+        if len(result) >= limit:
+            break
+    result.reverse()
+    return result
+
+
+@app.get("/liquidations/{exchange}/{symbol}")
+async def get_liquidations(
+    exchange: str,
+    symbol: str,
+    limit: int = Query(100, le=500),
+):
+    """REST: last N liquidations from Redis stream (ts, price, quantity, side)."""
+    r = await get_redis()
+    messages = await r.xrevrange(STREAM_LIQUIDATIONS, count=limit)
+    result = []
+    for _mid, fields in messages or []:
+        payload_str = (fields or {}).get("payload")
+        if not payload_str:
+            continue
+        try:
+            payload = json.loads(payload_str)
+        except json.JSONDecodeError:
+            continue
+        if not _match(exchange, symbol, payload):
+            continue
+        result.append({
+            "ts": payload.get("ts"),
+            "price": float(payload.get("price", 0)),
+            "quantity": float(payload.get("quantity", 0)),
+            "side": payload.get("side", ""),
         })
         if len(result) >= limit:
             break

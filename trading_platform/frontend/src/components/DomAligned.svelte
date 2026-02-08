@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from 'svelte'
+  import { onMount, onDestroy } from 'svelte'
   import { formatPrice, formatSize } from '../lib/format'
 
   export let data: { ts: number; bids: [number, number][]; asks: [number, number][] } | null = null
@@ -14,24 +14,28 @@
   let ctx: CanvasRenderingContext2D | null = null
   const dpr = typeof window !== 'undefined' ? Math.min(2, window.devicePixelRatio || 1) : 1
 
-  const MIN_ROW_HEIGHT = 18
+  const ROW_HEIGHT = 20
+  const DOM_REDRAW_THROTTLE_MS = 120
+  let lastDrawTime = 0
+  let throttleTimer: ReturnType<typeof setTimeout> | null = null
 
   $: priceRange = priceMax - priceMin || 1
   $: mid = lastPrice ?? (data?.bids?.[0]?.[0] != null && data?.asks?.[0]?.[0] != null
     ? (data.bids[0][0] + data.asks[0][0]) / 2
     : (priceMin + priceMax) / 2)
 
-  $: maxRows = Math.max(5, Math.floor(plotH / MIN_ROW_HEIGHT))
-  $: halfRows = Math.floor(maxRows / 2)
+  $: maxVisibleRows = Math.max(3, Math.floor(plotH / ROW_HEIGHT))
+  $: maxRowsPerSide = Math.floor(maxVisibleRows / 2)
+  $: effectiveDepth = Math.min(depth, maxRowsPerSide)
 
   $: asksSorted = (data?.asks ?? [])
     .filter(([p]) => p > mid)
     .sort((a, b) => a[0] - b[0])
-    .slice(0, depth)
+    .slice(0, effectiveDepth)
   $: bidsSorted = (data?.bids ?? [])
     .filter(([p]) => p < mid)
     .sort((a, b) => b[0] - a[0])
-    .slice(0, depth)
+    .slice(0, effectiveDepth)
 
   function priceToY(price: number): number {
     const frac = (price - priceMin) / priceRange
@@ -47,10 +51,10 @@
     let lastY: number | null = null
     for (const item of items) {
       const y = priceToYFn(item[0])
-      if (lastY != null && Math.abs(y - lastY) < MIN_ROW_HEIGHT) continue
+      if (lastY != null && Math.abs(y - lastY) < ROW_HEIGHT) continue
       out.push(item)
       lastY = y
-      if (out.length >= halfRows) break
+      if (out.length >= maxRowsPerSide) break
     }
     return out
   }
@@ -73,7 +77,7 @@
 
     const paddingLeft = 4
     const barMaxWidth = 60
-    const rowHeight = MIN_ROW_HEIGHT - 2
+    const rowHeight = ROW_HEIGHT - 2
     const font = '11px "JetBrains Mono", monospace'
     c.font = font
 
@@ -118,6 +122,22 @@
     })
   }
 
+  function scheduleDraw() {
+    const now = Date.now()
+    if (now - lastDrawTime < DOM_REDRAW_THROTTLE_MS) {
+      if (throttleTimer == null) {
+        throttleTimer = setTimeout(() => {
+          throttleTimer = null
+          lastDrawTime = Date.now()
+          draw()
+        }, DOM_REDRAW_THROTTLE_MS - (now - lastDrawTime))
+      }
+      return
+    }
+    lastDrawTime = now
+    draw()
+  }
+
   onMount(() => {
     ctx = canvas?.getContext('2d') ?? null
     if (canvas && ctx) {
@@ -128,6 +148,10 @@
       ctx.scale(dpr, dpr)
       draw()
     }
+  })
+
+  onDestroy(() => {
+    if (throttleTimer != null) clearTimeout(throttleTimer)
   })
 
   $: if (canvas && ctx && (data || lastPrice != null)) {
@@ -141,7 +165,7 @@
       ctx.setTransform(1, 0, 0, 1, 0, 0)
       ctx.scale(dpr, dpr)
     }
-    draw()
+    scheduleDraw()
   }
 </script>
 

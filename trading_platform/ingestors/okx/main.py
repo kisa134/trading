@@ -15,8 +15,8 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..",
 import redis.asyncio as redis
 import websockets
 
-from shared.schemas import orderbook_event, trade_event
-from shared.streams import STREAM_ORDERBOOK_UPDATES, STREAM_TRADES
+from shared.schemas import orderbook_event, trade_event, open_interest_event
+from shared.streams import STREAM_ORDERBOOK_UPDATES, STREAM_TRADES, STREAM_OPEN_INTEREST
 
 OKX_WS_URL = "wss://ws.okx.com:8443/ws/v5/public"
 OKX_REST_BOOKS = "https://www.okx.com/api/v5/market/books"
@@ -79,6 +79,7 @@ async def run_ingestor(redis_url: str, symbol: str):
         "args": [
             {"channel": "books", "instId": inst_id},
             {"channel": "trades", "instId": inst_id},
+            {"channel": "open-interest", "instId": inst_id},
         ],
     })
 
@@ -122,6 +123,14 @@ async def run_ingestor(redis_url: str, symbol: str):
                             continue
                         ev = trade_event(EXCHANGE, _inst_id_to_symbol(payload_inst), side, price, size, ts, trade_id)
                         await r.xadd(STREAM_TRADES, {"payload": json.dumps(ev)}, maxlen=50000)
+                elif channel == "open-interest":
+                    for d in data.get("data", []):
+                        ts = int(d.get("ts", time.time() * 1000))
+                        oi = float(d.get("openInterest", 0) or 0)
+                        oi_val = d.get("openInterestValue")
+                        oi_value = float(oi_val) if oi_val is not None else None
+                        ev = open_interest_event(EXCHANGE, _inst_id_to_symbol(payload_inst), ts, oi, oi_value)
+                        await r.xadd(STREAM_OPEN_INTEREST, {"payload": json.dumps(ev)}, maxlen=5000)
         except websockets.exceptions.ConnectionClosed as e:
             print(f"[okx] WS closed: {e}, reconnecting...")
         except Exception as e:
