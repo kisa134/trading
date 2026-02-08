@@ -91,6 +91,15 @@ services:
       - fromGroup: trading-env-5mux
 
   - type: worker
+    name: tick-anomaly
+    env: python
+    rootDir: trading_platform
+    buildCommand: pip install -r requirements.txt
+    startCommand: python -m services.mamba_core.tick_anomaly --redis $REDIS_URL --exchange bybit --symbol BTCUSDT
+    envVars:
+      - fromGroup: trading-env-5mux
+
+  - type: worker
     name: feature-candles
     env: python
     rootDir: trading_platform

@@ -69,7 +69,7 @@ async def run_cold_writer(redis_url: str, cold_url: str):
             heatmap_batch = []
         if footprint_batch:
             await conn.executemany(
-                "INSERT INTO footprint_bars (exchange, symbol, bar_start, bar_end, price, volume_bid, volume_ask, delta) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+                "INSERT INTO footprint_bars (exchange, symbol, bar_start, bar_end, price, volume_bid, volume_ask, delta, poc_price, imbalance_levels) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb)",
                 footprint_batch,
             )
             footprint_batch = []
@@ -136,6 +136,10 @@ async def run_cold_writer(redis_url: str, cold_url: str):
                             elif stream_name == STREAM_FOOTPRINT_BARS:
                                 bar_start = int(payload.get("start", 0))
                                 bar_end = int(payload.get("end", 0))
+                                poc_price = payload.get("poc_price")
+                                poc_price = float(poc_price) if poc_price is not None else None
+                                imbalance_levels = payload.get("imbalance_levels")
+                                imbalance_json = json.dumps(imbalance_levels) if imbalance_levels is not None else None
                                 for level in payload.get("levels", []):
                                     footprint_batch.append((
                                         exchange,
@@ -146,6 +150,8 @@ async def run_cold_writer(redis_url: str, cold_url: str):
                                         float(level.get("vol_bid", 0)),
                                         float(level.get("vol_ask", 0)),
                                         float(level.get("delta", 0)),
+                                        poc_price,
+                                        imbalance_json,
                                     ))
                             elif stream_name == STREAM_EVENTS:
                                 ev = payload
