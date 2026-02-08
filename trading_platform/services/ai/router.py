@@ -4,8 +4,22 @@ Returns text response; tick_anomaly is handled by Visual Mamba worker (not HTTP)
 """
 from typing import Any
 
-from .config import get_model_for_role, get_multimodal_model, MODELS, MULTIMODAL_FALLBACK_MODEL
+from .config import (
+    get_model_for_role,
+    get_multimodal_model,
+    MODELS,
+    MULTIMODAL_FALLBACK_MODEL,
+    DEEPSEEK_REFLECTION_MODEL,
+)
 from . import providers
+
+COGNITIVE_SYSTEM_PROMPT = (
+    "You are a trading analyst. Use structured reasoning in <think>...</think> tags: "
+    "first state the facts (DOM, tape, footprint, events), then your hypothesis, "
+    "then check for spoofing or anomalies. After the think block, give a short "
+    "actionable conclusion (entry/exit/avoid and why). If you revise your view, "
+    'say so explicitly in <think> (e.g. "revising: possible spoof").'
+)
 
 
 async def route_text_analyst(text: str, system_prompt: str | None = None) -> str:
@@ -38,7 +52,40 @@ async def route_reflection(prompt: str) -> str:
     if not model or model["provider"] != "openrouter":
         return ""
     messages = [{"role": "user", "content": prompt}]
-    return await providers.openrouter_chat(messages, model["model_id"], max_tokens=1024)
+    return await providers.openrouter_chat(messages, DEEPSEEK_REFLECTION_MODEL, max_tokens=1024)
+
+
+def parse_think_blocks(text: str) -> list[str]:
+    """Extract <think>...</think> blocks from R1 response. Returns list of inner content."""
+    import re
+    blocks = re.findall(r"<think>\s*(.*?)\s*</think>", text, re.DOTALL | re.IGNORECASE)
+    return [b.strip() for b in blocks]
+
+
+def has_doubt_or_revision(text: str) -> bool:
+    """True if response suggests revision, anomaly, or spoof concern (Aha moment)."""
+    lower = text.lower()
+    markers = ("revising", "reconsider", "аномал", "anomaly", "спуфинг", "spoof", "пересмотр", "doubt", "осторожн")
+    return any(m in lower for m in markers)
+
+
+async def route_cognitive_analyst(
+    text: str,
+    system_prompt: str | None = None,
+    graph_context: str | None = None,
+) -> str:
+    """Strategic analyst: DeepSeek R1 with <think> and GraphRAG context."""
+    model = get_model_for_role("cognitive_analyst")
+    if not model or model["provider"] != "openrouter":
+        return ""
+    sys_content = system_prompt or COGNITIVE_SYSTEM_PROMPT
+    if graph_context:
+        sys_content = f"{sys_content}\n\nGraph memory (past similar situations and levels):\n{graph_context}"
+    messages: list[dict[str, Any]] = [
+        {"role": "system", "content": sys_content},
+        {"role": "user", "content": text},
+    ]
+    return await providers.openrouter_chat(messages, model["model_id"], max_tokens=2048)
 
 
 async def route_multimodal(

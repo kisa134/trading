@@ -54,6 +54,10 @@ async def run_wall_spoof_detector(redis_url: str, exchange: str = "bybit", symbo
     recent_bid_levels: deque = deque(maxlen=50)
     recent_ask_levels: deque = deque(maxlen=50)
     wall_seen: set[tuple[str, float]] = set()
+    # Pulling: track previous total liquidity per side to detect mass cancellation
+    prev_bid_total: float = 0.0
+    prev_ask_total: float = 0.0
+    PULLING_DROP_RATIO = 0.5  # emit if side drops by 50%+ in one check
 
     while True:
         try:
@@ -136,6 +140,32 @@ async def run_wall_spoof_detector(redis_url: str, exchange: str = "bybit", symbo
                             "size": s,
                             "ts": now_ts,
                         })
+
+            # Pulling: mass cancellation — total liquidity on one side drops sharply
+            bid_total = sum(s for _, s in bids)
+            ask_total = sum(s for _, s in asks)
+            if prev_bid_total > 0 and bid_total < prev_bid_total * (1 - PULLING_DROP_RATIO):
+                events.append({
+                    "type": "PULLING_LIQUIDITY",
+                    "exchange": exchange,
+                    "symbol": symbol,
+                    "side": "bid",
+                    "ts": now_ts,
+                    "prev_total": round(prev_bid_total, 4),
+                    "curr_total": round(bid_total, 4),
+                })
+            if prev_ask_total > 0 and ask_total < prev_ask_total * (1 - PULLING_DROP_RATIO):
+                events.append({
+                    "type": "PULLING_LIQUIDITY",
+                    "exchange": exchange,
+                    "symbol": symbol,
+                    "side": "ask",
+                    "ts": now_ts,
+                    "prev_total": round(prev_ask_total, 4),
+                    "curr_total": round(ask_total, 4),
+                })
+            prev_bid_total = bid_total
+            prev_ask_total = ask_total
 
             for event in events:
                 payload = json.dumps(event)

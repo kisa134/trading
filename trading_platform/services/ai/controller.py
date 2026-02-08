@@ -39,13 +39,29 @@ async def run_controller(get_redis, get_or_build_context, route_multimodal, send
                     )
                     image_base64 = await r.get(blob_key)
                     context = await get_or_build_context(r, exchange, symbol)
+                    graph_parts = []
                     try:
-                        from services.graph.graphrag import query_similar_situations
-                        graph_ctx = query_similar_situations(exchange, symbol, limit=10)
-                        if graph_ctx:
-                            context = f"Graph memory (similar past situations):\n{graph_ctx}\n\n---\n{context}"
+                        from services.graph.graphrag import (
+                            query_similar_situations,
+                            query_by_price_level,
+                            query_chain_events_to_price,
+                        )
+                        graph_parts.append(query_similar_situations(exchange, symbol, limit=10))
+                        graph_parts.append(query_chain_events_to_price(exchange, symbol, limit=5))
+                        try:
+                            from shared.streams import REDIS_KEY_TRADES
+                            trades_key = REDIS_KEY_TRADES.format(exchange=exchange, symbol=symbol)
+                            last_trade_raw = await r.lrange(trades_key, -1, -1)
+                            if last_trade_raw:
+                                lt = json.loads(last_trade_raw[0])
+                                price = float(lt.get("price", 0))
+                                if price > 0:
+                                    graph_parts.append(query_by_price_level(exchange, symbol, price, limit=5))
+                        except Exception:
+                            pass
+                        graph_ctx = "\n\n".join(p for p in graph_parts if p)
                     except Exception:
-                        pass
+                        graph_ctx = ""
                     try:
                         from services.ai.experience_replay import search_few_shot
                         few_shot = await search_few_shot(exchange, symbol, limit=3)
@@ -56,20 +72,41 @@ async def run_controller(get_redis, get_or_build_context, route_multimodal, send
                             context = prefix + context
                     except Exception:
                         pass
-                    cached_name = None
+                    text = ""
                     try:
-                        from services.ai.context_caching import get_or_refresh_cache_name
-                        cached_name = await get_or_refresh_cache_name(r)
+                        from services.ai.router import (
+                            route_cognitive_analyst,
+                            route_multimodal,
+                            has_doubt_or_revision,
+                        )
+                        text = await route_cognitive_analyst(
+                            context,
+                            graph_context=graph_ctx or None,
+                        )
+                        if text and has_doubt_or_revision(text):
+                            follow_up = await route_cognitive_analyst(
+                                f"Проверь гипотезу. Твой предыдущий вывод:\n{text[:1500]}\n\nПерепроверь на спуфинг и аномалии, затем дай итоговую рекомендацию.",
+                                graph_context=graph_ctx or None,
+                            )
+                            if follow_up:
+                                text = follow_up
                     except Exception:
                         pass
-                    try:
-                        text = await route_multimodal(context, image_base64, cached_content_name=cached_name)
-                    except Exception as e:
-                        err_msg = str(e)
-                        if "openrouter_not_configured" in err_msg:
-                            text = "[AI error] openrouter_not_configured"
-                        else:
-                            text = f"[AI error] {e!s}"
+                    if not text:
+                        cached_name = None
+                        try:
+                            from services.ai.context_caching import get_or_refresh_cache_name
+                            cached_name = await get_or_refresh_cache_name(r, exchange=exchange, symbol=symbol)
+                        except Exception:
+                            pass
+                        try:
+                            text = await route_multimodal(context, image_base64, cached_content_name=cached_name)
+                        except Exception as e:
+                            err_msg = str(e)
+                            if "openrouter_not_configured" in err_msg:
+                                text = "[AI error] openrouter_not_configured"
+                            else:
+                                text = f"[AI error] {e!s}"
                     await send_ai_response(exchange, symbol, text)
         except asyncio.CancelledError:
             break

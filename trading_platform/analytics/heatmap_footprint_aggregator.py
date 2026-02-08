@@ -116,12 +116,33 @@ async def run_heatmap_footprint(redis_url: str, exchange: str = "bybit", symbol:
                             levels[b][0] += s
                         else:
                             levels[b][1] += s
+                    sorted_items = sorted(levels.items())
+                    level_list = [{"price": p, "vol_bid": v[0], "vol_ask": v[1], "delta": v[0] - v[1]} for p, v in sorted_items]
+                    # POC: level with max total volume
+                    poc_price: float | None = None
+                    if level_list:
+                        best = max(level_list, key=lambda x: x["vol_bid"] + x["vol_ask"])
+                        poc_price = best["price"]
+                    # Imbalance: buy vol at level >= 3x sell vol at level below (or vice versa)
+                    IMBALANCE_RATIO = 3.0
+                    imbalance_levels: list[dict] = []
+                    for i, lev in enumerate(level_list):
+                        vol_bid, vol_ask = lev["vol_bid"], lev["vol_ask"]
+                        # compare with level below (index i+1)
+                        if i + 1 < len(level_list):
+                            below = level_list[i + 1]
+                            if vol_bid >= IMBALANCE_RATIO * below["vol_ask"] and below["vol_ask"] > 0:
+                                imbalance_levels.append({"price": lev["price"], "side": "buy", "ratio": round(vol_bid / below["vol_ask"], 2)})
+                            if vol_ask >= IMBALANCE_RATIO * below["vol_bid"] and below["vol_bid"] > 0:
+                                imbalance_levels.append({"price": lev["price"], "side": "sell", "ratio": round(vol_ask / below["vol_bid"], 2)})
                     footprint = {
                         "exchange": exchange,
                         "symbol": symbol,
                         "start": bar_start_ts,
                         "end": bar_start_ts + bar_ms,
-                        "levels": [{"price": p, "vol_bid": v[0], "vol_ask": v[1], "delta": v[0] - v[1]} for p, v in sorted(levels.items())],
+                        "levels": level_list,
+                        "poc_price": poc_price,
+                        "imbalance_levels": imbalance_levels,
                     }
                     payload = json.dumps(footprint)
                     await r.xadd(STREAM_FOOTPRINT_BARS, {"payload": payload}, maxlen=5000)

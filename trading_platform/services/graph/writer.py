@@ -1,5 +1,6 @@
 """
 Write events and outcomes to graph (Neo4j). No-op if NEO4J_URI not set.
+Extended: PriceLevel, Trade, StrategyOutcome; FOLLOWED_BY, REJECTED_AT.
 """
 import os
 from typing import Any
@@ -128,6 +129,138 @@ def write_outcome(prediction_id: str, outcome: str, actual_price: float, reflect
                 outcome=outcome,
                 actual_price=actual_price,
                 reflection=reflection_text or "",
+            )
+        return True
+    except Exception:
+        return False
+    finally:
+        d.close()
+
+
+def write_price_level(
+    exchange: str, symbol: str, price: float, ts: int, vol_bid: float, vol_ask: float
+) -> bool:
+    """Create or update PriceLevel node (orderbook level snapshot)."""
+    d = _driver()
+    if not d:
+        return False
+    try:
+        with d.session() as session:
+            session.run(
+                """
+                MERGE (pl:PriceLevel {id: $id})
+                SET pl.exchange = $exchange, pl.symbol = $symbol, pl.price = $price,
+                    pl.ts = $ts, pl.vol_bid = $vol_bid, pl.vol_ask = $vol_ask
+                """,
+                id=f"{exchange}:{symbol}:{price}:{ts}",
+                exchange=exchange,
+                symbol=symbol,
+                price=price,
+                ts=ts,
+                vol_bid=vol_bid,
+                vol_ask=vol_ask,
+            )
+        return True
+    except Exception:
+        return False
+    finally:
+        d.close()
+
+
+def write_trade(
+    exchange: str, symbol: str, trade_id: str, ts: int, price: float, size: float, side: str
+) -> bool:
+    """Create Trade node."""
+    d = _driver()
+    if not d:
+        return False
+    try:
+        with d.session() as session:
+            session.run(
+                """
+                MERGE (t:Trade {id: $id})
+                SET t.exchange = $exchange, t.symbol = $symbol, t.ts = $ts,
+                    t.price = $price, t.size = $size, t.side = $side
+                """,
+                id=trade_id,
+                exchange=exchange,
+                symbol=symbol,
+                ts=ts,
+                price=price,
+                size=size,
+                side=side,
+            )
+        return True
+    except Exception:
+        return False
+    finally:
+        d.close()
+
+
+def write_strategy_outcome(
+    exchange: str,
+    symbol: str,
+    outcome_id: str,
+    ts: int,
+    direction: str,
+    level: float,
+    outcome_type: str = "entry",
+) -> bool:
+    """Create StrategyOutcome node (entry/exit at level). Link to MarketState via ABOUT."""
+    d = _driver()
+    if not d:
+        return False
+    try:
+        with d.session() as session:
+            session.run(
+                """
+                CREATE (s:StrategyOutcome {id: $id})
+                SET s.exchange = $exchange, s.symbol = $symbol, s.ts = $ts,
+                    s.direction = $direction, s.level = $level, s.outcome_type = $outcome_type
+                WITH s
+                OPTIONAL MATCH (m:MarketState {exchange: $exchange, symbol: $symbol})
+                WHERE m.ts <= $ts
+                WITH s, m ORDER BY m.ts DESC LIMIT 1
+                WHERE m IS NOT NULL
+                MERGE (s)-[:ABOUT]->(m)
+                """,
+                id=outcome_id,
+                exchange=exchange,
+                symbol=symbol,
+                ts=ts,
+                direction=direction,
+                level=level,
+                outcome_type=outcome_type,
+            )
+        return True
+    except Exception:
+        return False
+    finally:
+        d.close()
+
+
+def write_rejected_at(event_id: str, exchange: str, symbol: str, price: float, ts: int) -> bool:
+    """Link Event to PriceLevel as REJECTED_AT (e.g. breakout failed at level)."""
+    d = _driver()
+    if not d:
+        return False
+    try:
+        with d.session() as session:
+            session.run(
+                """
+                MATCH (e:Event {id: $event_id})
+                WITH e
+                OPTIONAL MATCH (pl:PriceLevel)
+                WHERE pl.exchange = $exchange AND pl.symbol = $symbol AND pl.price = $price AND pl.ts <= $ts
+                WITH e, pl ORDER BY pl.ts DESC LIMIT 1
+                WHERE pl IS NOT NULL
+                MERGE (e)-[:REJECTED_AT]->(pl)
+                """,
+                event_id=event_id,
+                exchange=exchange,
+                symbol=symbol,
+                price=price,
+                ts=ts,
             )
         return True
     except Exception:

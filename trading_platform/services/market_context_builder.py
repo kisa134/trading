@@ -22,6 +22,7 @@ from shared.streams import (
     REDIS_KEY_SCORES_EXHAUSTION,
     REDIS_KEY_SIGNALS_RULE,
     REDIS_KEY_AI_CONTEXT,
+    REDIS_KEY_MAMBA_SIGNAL,
     AI_CONTEXT_TTL_SEC,
     SCORES_MAXLEN,
     SIGNALS_MAXLEN,
@@ -85,7 +86,7 @@ async def build_market_context(r: redis.Redis, exchange: str, symbol: str) -> st
                 continue
         parts.append("")
 
-    # Footprint: last N bars (delta per bar)
+    # Footprint: last N bars (delta, POC, Imbalance)
     fp_key = REDIS_KEY_FOOTPRINT.format(exchange=exchange, symbol=symbol)
     fp_items = await r.lrange(fp_key, -FOOTPRINT_LAST_N, -1)
     if fp_items:
@@ -96,7 +97,14 @@ async def build_market_context(r: redis.Redis, exchange: str, symbol: str) -> st
                 start = bar.get("start", 0)
                 levels = bar.get("levels", [])
                 delta_sum = sum(l.get("delta", 0) for l in levels)
-                parts.append(f"  {_ts_to_str(start)} levels={len(levels)} bar_delta={delta_sum:.0f}")
+                line = f"  {_ts_to_str(start)} levels={len(levels)} bar_delta={delta_sum:.0f}"
+                poc = bar.get("poc_price")
+                if poc is not None:
+                    line += f" POC={poc}"
+                imb = bar.get("imbalance_levels", [])
+                if imb:
+                    line += " imbalance=[" + ", ".join(f"{x.get('side')}@{x.get('price')} {x.get('ratio')}x" for x in imb[:3]) + "]"
+                parts.append(line)
             except (json.JSONDecodeError, TypeError):
                 continue
         parts.append("")
@@ -148,6 +156,20 @@ async def build_market_context(r: redis.Redis, exchange: str, symbol: str) -> st
             except (json.JSONDecodeError, TypeError):
                 continue
         parts.append("")
+
+    # Mamba tick signal (prob_up, prob_down, delta_score)
+    mamba_key = REDIS_KEY_MAMBA_SIGNAL.format(exchange=exchange, symbol=symbol)
+    mamba_raw = await r.get(mamba_key)
+    if mamba_raw:
+        try:
+            mamba = json.loads(mamba_raw)
+            parts.append("=== MAMBA SIGNAL ===")
+            parts.append(
+                f"  prob_up={mamba.get('prob_up', 0):.2f} prob_down={mamba.get('prob_down', 0):.2f} delta_score={mamba.get('delta_score', 0):.2f} ts={_ts_to_str(mamba.get('ts'))}"
+            )
+            parts.append("")
+        except json.JSONDecodeError:
+            pass
 
     # Rule reversal signals
     sig_key = REDIS_KEY_SIGNALS_RULE.format(exchange=exchange, symbol=symbol)

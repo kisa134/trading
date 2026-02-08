@@ -154,6 +154,15 @@ services:
       - fromGroup: trading-env-5mux
 
   - type: worker
+    name: graph-writer
+    env: python
+    rootDir: trading_platform
+    buildCommand: pip install -r requirements.txt
+    startCommand: python -m storage.graph_writer --redis $REDIS_URL
+    envVars:
+      - fromGroup: trading-env-5mux
+
+  - type: worker
     name: celery-worker
     env: python
     rootDir: trading_platform
@@ -179,4 +188,10 @@ envVarGroups:
       - key: OPENROUTER_API_KEY
         sync: false
       - key: COLD_STORAGE_URL
+        sync: false
+      - key: NEO4J_URI
+        sync: false
+      - key: NEO4J_USER
+        sync: false
+      - key: NEO4J_PASSWORD
         sync: false

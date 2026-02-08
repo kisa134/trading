@@ -8,12 +8,15 @@
     if (t.includes('ICEBERG')) return 'iceberg'
     if (t.includes('WALL')) return 'wall'
     if (t.includes('SPOOF')) return 'spoof'
+    if (t.includes('PULLING') || t.includes('CANCELLATION')) return 'pulling'
     return ''
   }
   function typeLabel(t: string): string {
     if (t.includes('ICEBERG')) return 'Iceberg'
     if (t.includes('WALL')) return 'Wall'
     if (t.includes('SPOOF')) return 'Spoof'
+    if (t.includes('PULLING')) return 'Pulling'
+    if (t.includes('CANCELLATION')) return 'Cancellation'
     return t
   }
   function formatDetailValue(v: unknown): string {
@@ -62,6 +65,7 @@
   .event.iceberg { border-left-color: var(--buy); }
   .event.wall { border-left-color: #f59e0b; }
   .event.spoof { border-left-color: var(--sell); }
+  .event.pulling { border-left-color: #8b5cf6; }
   .type { color: var(--text); font-weight: 500; }
   .price { font-variant-numeric: tabular-nums; }
   .side { color: var(--text-muted); }

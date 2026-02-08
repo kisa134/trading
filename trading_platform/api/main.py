@@ -39,6 +39,7 @@ from shared.streams import (
     REDIS_KEY_IMBALANCE_HISTORY,
     REDIS_KEY_OI,
     REDIS_KEY_LIQUIDATIONS,
+    REDIS_KEY_MAMBA_SIGNAL,
     STREAM_AI_SNAPSHOTS,
     REDIS_KEY_AI_SNAPSHOT_BLOB,
 )
@@ -417,6 +418,20 @@ async def get_signals_rule(exchange: str, symbol: str, limit: int = 200):
     key = REDIS_KEY_SIGNALS_RULE.format(exchange=exchange, symbol=symbol)
     items = await r.lrange(key, -limit, -1)
     return [json.loads(x) for x in (items or [])]
+
+
+@app.get("/mamba_signal/{exchange}/{symbol}")
+async def get_mamba_signal(exchange: str, symbol: str):
+    """REST: current Mamba tick signal (prob_up, prob_down, delta_score, ts). From Redis when tick_anomaly worker runs."""
+    r = await get_redis()
+    key = REDIS_KEY_MAMBA_SIGNAL.format(exchange=exchange, symbol=symbol)
+    raw = await r.get(key)
+    if not raw:
+        return None
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        return None
 
 
 @app.get("/imbalance/{exchange}/{symbol}")

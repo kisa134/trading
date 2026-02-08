@@ -2,9 +2,33 @@
   import { onMount, onDestroy } from 'svelte'
   import { formatPrice, formatTime } from '../lib/format'
 
-  export let slices: Array<{ ts: number; rows: Array<{ price: number; vol_bid: number; vol_ask: number }> }> = []
-  export let candles: Array<{ start: number; open: number; high: number; low: number; close: number; volume: number }> = []
-  export let trades: Array<{ ts: number; price: number; size: number; side: string }> = []
+  interface HeatmapRow {
+    price: number
+    vol_bid: number
+    vol_ask: number
+  }
+  interface HeatmapSlice {
+    ts: number
+    rows: HeatmapRow[]
+  }
+  interface CandlePoint {
+    start: number
+    open: number
+    high: number
+    low: number
+    close: number
+    volume: number
+  }
+  interface TradePoint {
+    ts: number
+    price: number
+    size: number
+    side: string
+  }
+
+  export let slices: HeatmapSlice[] = []
+  export let candles: CandlePoint[] = []
+  export let trades: TradePoint[] = []
   export let bubbleMode: 'off' | 'candles' | 'trades' = 'candles'
   export let windowStart = 0
   export let windowEnd = 0
@@ -19,6 +43,11 @@
   export let showPriceLabels = true
   export let showTimeLabels = true
   export let lastPrice: number | null = null
+  export let liquidations: Array<{ ts: number; price: number; quantity: number; side: string }> = []
+  /** Heatmap controls: contrast (1 = normal), brightness (0..1), cutoff (0..1 min volume fraction to show). */
+  export let contrast = 1
+  export let brightness = 0.5
+  export let cutoff = 0
 
   let container: HTMLDivElement
   let heatmapCanvas: HTMLCanvasElement
@@ -41,7 +70,9 @@
   let lastClientX = 0
   let lastWindowStart = 0
   let lastWindowEnd = 0
-  let pendingRedraw = false
+  let dirty = true
+  let rafId: number | null = null
+  let heatmapSettingsOpen = false
   const dpr = typeof window !== 'undefined' ? Math.min(2, window.devicePixelRatio || 1) : 1
 
   $: winStart = normalizeTs(windowStart)
@@ -126,7 +157,17 @@
     })
   })()
 
-  $: maxTradeSize = viewTrades.length ? Math.max(...viewTrades.map((t) => t.size), 1) : 1
+  $: viewLiquidations = (() => {
+    if (!liquidations.length) return []
+    const winS = winStart
+    const winE = winEnd
+    const norm = (ts: number) => (ts < 10_000_000_000 ? ts * 1000 : ts)
+    return liquidations.filter((liq) => {
+      const tt = norm(liq.ts)
+      return tt >= winS && tt <= winE
+    })
+  })()
+
   const BUBBLES_DECIMATION_MAX = 800
 
   function hexToRgb(hex: string): [number, number, number] {
@@ -154,6 +195,9 @@
     const nY = heatmapPrices.length
     const cellW = Math.max(1, plotW / nX)
     const volScale = 1 / Math.log(maxVolHeat + 1)
+    const cut = Math.max(0, Math.min(1, cutoff))
+    const cont = Math.max(0.1, contrast)
+    const bright = Math.max(0, Math.min(1, brightness))
 
     for (let xi = 0; xi < nX; xi++) {
       const slice = slicesToDraw[xi]
@@ -162,8 +206,9 @@
         const price = heatmapPrices[yi]
         const r = rowMap.get(price)
         const vol = r ? (showBid ? r.vol_bid : 0) + (showAsk ? r.vol_ask : 0) : 0
-        const intensity = Math.min(1, Math.log(vol + 1) * volScale)
-        if (intensity < HEATMAP_INTENSITY_THRESHOLD) continue
+        let intensity = Math.min(1, Math.log(vol + 1) * volScale)
+        if (intensity < cut || intensity < HEATMAP_INTENSITY_THRESHOLD) continue
+        intensity = Math.min(1, intensity * cont + bright)
         const bidInt = showBid && r?.vol_bid ? intensity : 0
         const askInt = showAsk && r?.vol_ask ? intensity : 0
         const r_ = Math.round(40 + askInt * (rgbAsk[0] - 40))
@@ -230,23 +275,79 @@
     }
 
     if (bubbleMode === 'trades' && viewTrades.length) {
-      let toDraw = viewTrades
-      if (toDraw.length > BUBBLES_DECIMATION_MAX) {
-        const step = Math.ceil(toDraw.length / BUBBLES_DECIMATION_MAX)
-        toDraw = toDraw.filter((_, i) => i % step === 0)
-      }
       const minR = 1.5
       const maxR = 8
-      const sizeScale = maxTradeSize > 0 ? 1 / maxTradeSize : 0
-      toDraw.forEach((t) => {
-        const x = timeToX(t.ts)
-        const y = priceToY(t.price)
-        const r = Math.max(minR, Math.sqrt(t.size * sizeScale) * maxR)
-        const isBuy = (t.side || '').toLowerCase().startsWith('b')
-        bubblesCtx!.fillStyle = isBuy ? bubbleUp : bubbleDown
+      const timeSpanMs = timeSpan
+      const priceRangeVal = priceRange
+      const clusterByPixels = 18
+      const timeBucketMs = timeSpanMs > 0 && plotW > 0 ? (timeSpanMs / plotW) * clusterByPixels : 0
+      const priceBucket = priceRangeVal > 0 && plotH > 0 ? (priceRangeVal / plotH) * clusterByPixels : 0
+      const useClustering = viewTrades.length > BUBBLES_DECIMATION_MAX || (timeBucketMs > 0 && priceBucket > 0 && (timeSpanMs / timeBucketMs < viewTrades.length * 0.5))
+
+      let toDraw: Array<{ x: number; y: number; size: number; delta: number }>
+      if (useClustering && timeBucketMs > 0 && priceBucket > 0) {
+        const norm = (ts: number) => (ts < 10_000_000_000 ? ts * 1000 : ts)
+        const buckets = new Map<string, { vol: number; delta: number }>()
+        viewTrades.forEach((t) => {
+          const tt = norm(t.ts)
+          const tKey = Math.floor(tt / timeBucketMs) * timeBucketMs
+          const pKey = Math.floor(t.price / priceBucket) * priceBucket
+          const key = `${tKey}_${pKey}`
+          const isBuy = (t.side || '').toLowerCase().startsWith('b')
+          const d = isBuy ? t.size : -t.size
+          const cur = buckets.get(key) || { vol: 0, delta: 0 }
+          cur.vol += t.size
+          cur.delta += d
+          buckets.set(key, cur)
+        })
+        toDraw = []
+        buckets.forEach((v, key) => {
+          const [tKey, pKey] = key.split('_').map(Number)
+          const x = timeToX(tKey)
+          const y = priceToY(pKey)
+          toDraw.push({ x, y, size: v.vol, delta: v.delta })
+        })
+      } else {
+        let list = viewTrades
+        if (list.length > BUBBLES_DECIMATION_MAX) {
+          const step = Math.ceil(list.length / BUBBLES_DECIMATION_MAX)
+          list = list.filter((_, i) => i % step === 0)
+        }
+        toDraw = list.map((t) => ({
+          x: timeToX(t.ts),
+          y: priceToY(t.price),
+          size: t.size,
+          delta: (t.side || '').toLowerCase().startsWith('b') ? t.size : -t.size,
+        }))
+      }
+      const maxClustVol = toDraw.length ? Math.max(...toDraw.map((d) => d.size), 1) : 1
+      const clustScale = 1 / maxClustVol
+      toDraw.forEach((d) => {
+        const r = Math.max(minR, Math.sqrt(d.size * clustScale) * maxR)
+        bubblesCtx!.fillStyle = d.delta >= 0 ? bubbleUp : bubbleDown
         bubblesCtx!.beginPath()
-        bubblesCtx!.arc(x, y, r, 0, Math.PI * 2)
+        bubblesCtx!.arc(d.x, d.y, r, 0, Math.PI * 2)
         bubblesCtx!.fill()
+      })
+    }
+
+    // Liquidation markers: triangle at (time, price), color by side (Buy = green, Sell = red)
+    if (viewLiquidations.length && plotW > 0 && plotH > 0) {
+      const size = 6
+      viewLiquidations.forEach((liq) => {
+        const x = timeToX(liq.ts)
+        const y = priceToY(liq.price)
+        const isBuy = (liq.side || '').toLowerCase().startsWith('b')
+        bubblesCtx!.fillStyle = isBuy ? 'rgba(34, 197, 94, 0.9)' : 'rgba(248, 81, 73, 0.9)'
+        bubblesCtx!.strokeStyle = isBuy ? '#22c55e' : '#f85149'
+        bubblesCtx!.lineWidth = 1
+        bubblesCtx!.beginPath()
+        bubblesCtx!.moveTo(x, y - size)
+        bubblesCtx!.lineTo(x + size, y + size)
+        bubblesCtx!.lineTo(x - size, y + size)
+        bubblesCtx!.closePath()
+        bubblesCtx!.fill()
+        bubblesCtx!.stroke()
       })
     }
   }
@@ -298,19 +399,21 @@
     onTimeWindowChange(newStart, newEnd)
   }
 
-  function scheduleDraw() {
-    if (pendingRedraw) return
-    pendingRedraw = true
-    requestAnimationFrame(() => {
-      pendingRedraw = false
-      if (heatmapCtx && heatmapCanvas) drawHeatmap()
-      if (bubblesCtx && bubblesCanvas) drawBubbles()
-      const hasData = rowsByTs.length > 0 || viewCandles.length > 0 || viewTrades.length > 0
-      if (plotH > 0) {
-        if (hasData) notifyScale()
-        else if (lastPrice != null) onScaleChange({ priceMin: lastPrice - 100, priceMax: lastPrice + 100, plotH })
-      }
-    })
+  function doDraw() {
+    if (heatmapCtx && heatmapCanvas) drawHeatmap()
+    if (bubblesCtx && bubblesCanvas) drawBubbles()
+    const hasData = rowsByTs.length > 0 || viewCandles.length > 0 || viewTrades.length > 0 || viewLiquidations.length > 0
+    if (plotH > 0) {
+      if (hasData) notifyScale()
+      else if (lastPrice != null) onScaleChange({ priceMin: lastPrice - 100, priceMax: lastPrice + 100, plotH })
+    }
+  }
+
+  function rafLoop() {
+    rafId = requestAnimationFrame(rafLoop)
+    if (!dirty) return
+    dirty = false
+    doDraw()
   }
 
   /** Expose heatmap canvas for AI snapshot capture (toBlob). */
@@ -341,7 +444,7 @@
     }
     plotW = logicalW - paddingLeft - paddingRight
     plotH = logicalH - paddingTop - paddingBottom
-    scheduleDraw()
+    dirty = true
   }
 
   let ro: ResizeObserver | null = null
@@ -351,17 +454,34 @@
     resize()
     ro = new ResizeObserver(resize)
     ro.observe(container)
+    rafId = requestAnimationFrame(rafLoop)
   })
   onDestroy(() => {
+    if (rafId != null) cancelAnimationFrame(rafId)
+    rafId = null
     ro?.disconnect()
   })
 
-  $: if (slices.length || candles.length || trades.length || bubbleMode === 'off') {
-    scheduleDraw()
+  $: {
+    void [slices.length, candles.length, trades.length, liquidations.length, bubbleMode, windowStart, windowEnd, contrast, brightness, cutoff]
+    dirty = true
   }
 </script>
 
 <div class="wrap" bind:this={container}>
+  <button
+    type="button"
+    class="heatmap-settings-btn"
+    title="Настройки тепловой карты"
+    on:click={() => (heatmapSettingsOpen = !heatmapSettingsOpen)}
+  >Heatmap</button>
+  {#if heatmapSettingsOpen}
+    <div class="heatmap-settings-panel">
+      <label>Контраст <input type="range" min="0.2" max="3" step="0.1" bind:value={contrast} /></label>
+      <label>Яркость <input type="range" min="0" max="1" step="0.05" bind:value={brightness} /></label>
+      <label>Отсечка <input type="range" min="0" max="1" step="0.05" bind:value={cutoff} /></label>
+    </div>
+  {/if}
   <canvas
     bind:this={heatmapCanvas}
     class="layer heatmap-layer"
@@ -411,4 +531,31 @@
   .wrap:has(.bubbles-layer) .heatmap-layer {
     pointer-events: auto;
   }
+  .heatmap-settings-btn {
+    position: absolute;
+    top: 4px;
+    left: 4px;
+    z-index: 2;
+    padding: 2px 8px;
+    font-size: 11px;
+    background: var(--bg-panel);
+    border: 1px solid var(--border);
+    color: var(--text);
+    cursor: pointer;
+  }
+  .heatmap-settings-panel {
+    position: absolute;
+    top: 28px;
+    left: 4px;
+    z-index: 10;
+    background: var(--bg-panel);
+    border: 1px solid var(--border-strong);
+    padding: 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    font-size: 11px;
+  }
+  .heatmap-settings-panel label { display: flex; align-items: center; gap: 8px; }
+  .heatmap-settings-panel input[type="range"] { width: 80px; }
 </style>

@@ -37,12 +37,15 @@ LIQUIDATIONS_MAXLEN = 500
 # AI terminal: snapshots, context cache, predictions hot cache, Mamba anomalies
 STREAM_AI_SNAPSHOTS = "ai:snapshots"
 STREAM_AI_MAMBA_ANOMALIES = "ai:mamba_anomalies"
+STREAM_MAMBA_SIGNAL = "ai:mamba_signal"
 REDIS_KEY_AI_CONTEXT = "ai:context:{exchange}:{symbol}"
 REDIS_KEY_AI_SNAPSHOT_BLOB = "ai:snapshot:{exchange}:{symbol}:{ts}"
 REDIS_KEY_AI_PREDICTIONS_LIST = "ai:predictions:{exchange}:{symbol}"
 REDIS_KEY_AI_ANOMALIES = "ai:anomalies:{exchange}:{symbol}"
+REDIS_KEY_MAMBA_SIGNAL = "mamba:signal:{exchange}:{symbol}"
 AI_PREDICTIONS_MAXLEN = 200
 AI_CONTEXT_TTL_SEC = 15
+MAMBA_SIGNAL_TTL_SEC = 30
 
 SLICES_MAXLEN = 500
 IMBALANCE_HISTORY_MAXLEN = 500

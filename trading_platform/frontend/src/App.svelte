@@ -547,6 +547,7 @@
                 slices={viewHeatmap}
                 candles={aggregateCandles(candles, cell.timeframe)}
                 trades={viewTrades}
+                liquidations={liquidationsList}
                 {bubbleMode}
                 windowStart={windowStart}
                 windowEnd={windowEnd}
@@ -561,6 +562,7 @@
                 slices={viewHeatmap}
                 candles={aggregateCandles(candles, cell.timeframe)}
                 trades={viewTrades}
+                liquidations={liquidationsList}
                 {bubbleMode}
                 windowStart={windowStart}
                 windowEnd={windowEnd}

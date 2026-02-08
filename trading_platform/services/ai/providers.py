@@ -99,14 +99,27 @@ async def gemini_generate_content(
     return " ".join((p.get("text") or "") for p in parts)
 
 
+GEMINI_VISUAL_AUDIT_PROMPT = (
+    "You are analyzing a trading heatmap/canvas snapshot. Focus on: (1) liquidity patterns and "
+    "levels that may indicate support/resistance; (2) possible manipulation patterns such as spoofing "
+    "(large orders that appear and disappear), layering, or wash trading; (3) visual anomalies—unusual "
+    "volume clusters, gaps, or tape imbalance that are hard to formalize mathematically. "
+    "Mention any such patterns before giving a short actionable view."
+)
+
 async def gemini_multimodal(
     text: str,
     image_base64: str | None = None,
     model: str = "gemini-1.5-flash",
     cached_content_name: str | None = None,
+    visual_audit_prompt: bool = True,
 ) -> str:
-    """Single turn: text + optional image -> model response. Optional cached_content_name."""
-    parts = [{"text": text}]
+    """Single turn: text + optional image -> model response. Optional cached_content_name.
+    When image is present and visual_audit_prompt=True, prepends instruction for manipulation/anomaly focus."""
+    prompt_text = text
+    if image_base64 and visual_audit_prompt:
+        prompt_text = f"{GEMINI_VISUAL_AUDIT_PROMPT}\n\n---\n{prompt_text}"
+    parts = [{"text": prompt_text}]
     if image_base64:
         parts.append({"inlineData": {"mimeType": "image/jpeg", "data": image_base64}})
     contents = [{"role": "user", "parts": parts}]
