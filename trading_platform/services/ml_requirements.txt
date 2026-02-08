@@ -1,0 +1,7 @@
+# ML stack for mamba_core (CPU-first; for GPU add CUDA torch and mamba-ssm)
+torch>=2.0.0
+numpy>=1.24.0
+pandas>=2.0.0
+scikit-learn>=1.3.0
+# Optional: mamba-ssm (requires NVIDIA GPU). For CPU use Transformer fallback in TrendMambaModel.
+# mamba-ssm>=2.0.0

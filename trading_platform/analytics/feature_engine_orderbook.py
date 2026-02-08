@@ -13,7 +13,14 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 
 import redis.asyncio as redis
 
-from shared.streams import REDIS_KEY_ORDERBOOK_SLICES, REDIS_KEY_EVENTS, REDIS_KEY_SCORE_ORDERBOOK
+from shared.streams import (
+    REDIS_KEY_ORDERBOOK_SLICES,
+    REDIS_KEY_EVENTS,
+    REDIS_KEY_SCORE_ORDERBOOK,
+    REDIS_KEY_IMBALANCE,
+    REDIS_KEY_IMBALANCE_HISTORY,
+    IMBALANCE_HISTORY_MAXLEN,
+)
 
 LEVELS_LOOK = 20
 EVENT_LOOKBACK_MS = 300000
@@ -62,6 +69,11 @@ async def run_feature_engine_orderbook(redis_url: str, exchange: str, symbol: st
             ratio = max_size / med if med > 0 else 0.0
             score = _score_ratio(ratio)
 
+            sum_bid = sum(float(s) for _, s in bids if s is not None)
+            sum_ask = sum(float(s) for _, s in asks if s is not None)
+            total = sum_bid + sum_ask
+            imbalance_pct = (sum_bid - sum_ask) / total * 100.0 if total > 0 else 0.0
+
             # boost score if recent iceberg/wall events exist
             raw_events = await r.lrange(events_key, -50, -1)
             now = int(time.time() * 1000)
@@ -77,14 +89,24 @@ async def run_feature_engine_orderbook(redis_url: str, exchange: str, symbol: st
                     score = min(6.0, score + 1.0)
                     break
 
+            ts_snap = int(snap.get("ts", now))
             out = {
                 "exchange": exchange,
                 "symbol": symbol,
-                "ts": int(snap.get("ts", now)),
+                "ts": ts_snap,
                 "score_orderbook": round(score, 3),
                 "max_size_ratio": round(ratio, 3),
+                "imbalance_pct": round(imbalance_pct, 2),
+                "sum_bid": round(sum_bid, 4),
+                "sum_ask": round(sum_ask, 4),
             }
-            await r.set(REDIS_KEY_SCORE_ORDERBOOK.format(exchange=exchange, symbol=symbol), json.dumps(out), ex=300)
+            key_score = REDIS_KEY_SCORE_ORDERBOOK.format(exchange=exchange, symbol=symbol)
+            key_imbalance = REDIS_KEY_IMBALANCE.format(exchange=exchange, symbol=symbol)
+            key_history = REDIS_KEY_IMBALANCE_HISTORY.format(exchange=exchange, symbol=symbol)
+            await r.set(key_score, json.dumps(out), ex=300)
+            await r.set(key_imbalance, json.dumps({"ts": ts_snap, "imbalance_pct": round(imbalance_pct, 2)}), ex=300)
+            await r.rpush(key_history, json.dumps({"ts": ts_snap, "imbalance_pct": round(imbalance_pct, 2)}))
+            await r.ltrim(key_history, -IMBALANCE_HISTORY_MAXLEN, -1)
             await asyncio.sleep(1)
         except asyncio.CancelledError:
             break

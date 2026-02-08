@@ -4,6 +4,8 @@
 
   export let slices: Array<{ ts: number; rows: Array<{ price: number; vol_bid: number; vol_ask: number }> }> = []
   export let candles: Array<{ start: number; open: number; high: number; low: number; close: number; volume: number }> = []
+  export let trades: Array<{ ts: number; price: number; size: number; side: string }> = []
+  export let bubbleMode: 'off' | 'candles' | 'trades' = 'candles'
   export let windowStart = 0
   export let windowEnd = 0
   export let onTimeWindowChange: (start: number, end: number) => void = () => {}
@@ -38,6 +40,8 @@
   let lastClientX = 0
   let lastWindowStart = 0
   let lastWindowEnd = 0
+  let pendingRedraw = false
+  const dpr = typeof window !== 'undefined' ? Math.min(2, window.devicePixelRatio || 1) : 1
 
   $: winStart = normalizeTs(windowStart)
   $: winEnd = normalizeTs(windowEnd)
@@ -63,17 +67,23 @@
 
   $: candlePriceMin = viewCandles.length ? Math.min(...viewCandles.map((c) => c.low)) : null
   $: candlePriceMax = viewCandles.length ? Math.max(...viewCandles.map((c) => c.high)) : null
+  $: tradePriceMin = viewTrades.length ? Math.min(...viewTrades.map((t) => t.price)) : null
+  $: tradePriceMax = viewTrades.length ? Math.max(...viewTrades.map((t) => t.price)) : null
 
   $: priceMin = (() => {
     const fromHeat = heatmapPrices.length ? Math.min(...heatmapPrices) : null
-    if (candlePriceMin != null && fromHeat != null) return Math.min(candlePriceMin, fromHeat)
-    return candlePriceMin ?? fromHeat ?? 0
+    let lo = candlePriceMin ?? fromHeat ?? tradePriceMin
+    if (tradePriceMin != null && lo != null) lo = Math.min(lo, tradePriceMin)
+    else if (tradePriceMin != null) lo = tradePriceMin
+    return lo ?? 0
   })()
 
   $: priceMax = (() => {
     const fromHeat = heatmapPrices.length ? Math.max(...heatmapPrices) : null
-    if (candlePriceMax != null && fromHeat != null) return Math.max(candlePriceMax, fromHeat)
-    return candlePriceMax ?? fromHeat ?? 1
+    let hi = candlePriceMax ?? fromHeat ?? tradePriceMax
+    if (tradePriceMax != null && hi != null) hi = Math.max(hi, tradePriceMax)
+    else if (tradePriceMax != null) hi = tradePriceMax
+    return hi ?? 1
   })()
 
   $: priceRange = priceMax - priceMin || 1
@@ -104,6 +114,20 @@
     ? Math.max(...viewCandles.map((c) => c.volume), 1)
     : 1
 
+  $: viewTrades = (() => {
+    if (!trades.length) return []
+    const winS = winStart
+    const winE = winEnd
+    const norm = (ts: number) => (ts < 10_000_000_000 ? ts * 1000 : ts)
+    return trades.filter((t) => {
+      const tt = norm(t.ts)
+      return tt >= winS && tt <= winE
+    })
+  })()
+
+  $: maxTradeSize = viewTrades.length ? Math.max(...viewTrades.map((t) => t.size), 1) : 1
+  const BUBBLES_DECIMATION_MAX = 800
+
   function hexToRgb(hex: string): [number, number, number] {
     const m = hex.match(/^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i)
     return m ? [parseInt(m[1], 16), parseInt(m[2], 16), parseInt(m[3], 16)] : [0, 128, 0]
@@ -111,13 +135,15 @@
   $: rgbBid = hexToRgb(colorBid)
   $: rgbAsk = hexToRgb(colorAsk)
 
+  const HEATMAP_INTENSITY_THRESHOLD = 0.03
+
   function drawHeatmap() {
     if (!heatmapCtx || !heatmapCanvas) return
-    const w = heatmapCanvas.width
-    const h = heatmapCanvas.height
+    const w = heatmapCanvas.width / dpr
+    const h = heatmapCanvas.height / dpr
     plotW = w - paddingLeft - paddingRight
     plotH = h - paddingTop - paddingBottom
-    heatmapCtx.fillStyle = '#050505'
+    heatmapCtx.fillStyle = '#0a0a0a'
     heatmapCtx.fillRect(0, 0, w, h)
     if (!heatmapPrices.length || !rowsByTs.length) return
 
@@ -134,6 +160,7 @@
         const r = rowMap.get(price)
         const vol = r ? (showBid ? r.vol_bid : 0) + (showAsk ? r.vol_ask : 0) : 0
         const intensity = Math.min(1, Math.log(vol + 1) * volScale)
+        if (intensity < HEATMAP_INTENSITY_THRESHOLD) continue
         const bidInt = showBid && r?.vol_bid ? intensity : 0
         const askInt = showAsk && r?.vol_ask ? intensity : 0
         const r_ = Math.round(40 + askInt * (rgbAsk[0] - 40))
@@ -176,21 +203,49 @@
   }
 
   function drawBubbles() {
-    if (!bubblesCtx || !bubblesCanvas || !viewCandles.length) return
-    bubblesCtx.clearRect(0, 0, bubblesCanvas.width, bubblesCanvas.height)
-    const minR = 2
-    const maxR = Math.min(plotW / Math.max(viewCandles.length, 1) * 0.8, 24)
-    const volScale = maxVolBubbles > 0 ? 1 / maxVolBubbles : 0
-    viewCandles.forEach((c) => {
-      const x = timeToX(c.start)
-      const y = priceToY(c.close)
-      const r = Math.max(minR, Math.sqrt(c.volume * volScale) * maxR)
-      const isUp = c.close >= c.open
-      bubblesCtx!.fillStyle = isUp ? bubbleUp : bubbleDown
-      bubblesCtx!.beginPath()
-      bubblesCtx!.arc(x, y, r, 0, Math.PI * 2)
-      bubblesCtx!.fill()
-    })
+    if (!bubblesCtx || !bubblesCanvas) return
+    const w = bubblesCanvas.width / dpr
+    const h = bubblesCanvas.height / dpr
+    bubblesCtx.clearRect(0, 0, w, h)
+    if (bubbleMode === 'off') return
+
+    if (bubbleMode === 'candles' && viewCandles.length) {
+      const minR = 2
+      const maxR = Math.min(plotW / Math.max(viewCandles.length, 1) * 0.8, 24)
+      const volScale = maxVolBubbles > 0 ? 1 / maxVolBubbles : 0
+      viewCandles.forEach((c) => {
+        const x = timeToX(c.start)
+        const y = priceToY(c.close)
+        const r = Math.max(minR, Math.sqrt(c.volume * volScale) * maxR)
+        const isUp = c.close >= c.open
+        bubblesCtx!.fillStyle = isUp ? bubbleUp : bubbleDown
+        bubblesCtx!.beginPath()
+        bubblesCtx!.arc(x, y, r, 0, Math.PI * 2)
+        bubblesCtx!.fill()
+      })
+      return
+    }
+
+    if (bubbleMode === 'trades' && viewTrades.length) {
+      let toDraw = viewTrades
+      if (toDraw.length > BUBBLES_DECIMATION_MAX) {
+        const step = Math.ceil(toDraw.length / BUBBLES_DECIMATION_MAX)
+        toDraw = toDraw.filter((_, i) => i % step === 0)
+      }
+      const minR = 1.5
+      const maxR = 8
+      const sizeScale = maxTradeSize > 0 ? 1 / maxTradeSize : 0
+      toDraw.forEach((t) => {
+        const x = timeToX(t.ts)
+        const y = priceToY(t.price)
+        const r = Math.max(minR, Math.sqrt(t.size * sizeScale) * maxR)
+        const isBuy = (t.side || '').toLowerCase().startsWith('b')
+        bubblesCtx!.fillStyle = isBuy ? bubbleUp : bubbleDown
+        bubblesCtx!.beginPath()
+        bubblesCtx!.arc(x, y, r, 0, Math.PI * 2)
+        bubblesCtx!.fill()
+      })
+    }
   }
 
   function notifyScale() {
@@ -208,7 +263,7 @@
   function handleMouseMove(e: MouseEvent) {
     if (!isDragging || !heatmapCanvas) return
     const rect = heatmapCanvas.getBoundingClientRect()
-    const scaleX = heatmapCanvas.width / rect.width
+    const scaleX = (heatmapCanvas.width / dpr) / rect.width
     const deltaPx = (e.clientX - lastClientX) * scaleX
     const span = lastWindowEnd - lastWindowStart
     if (span <= 0) return
@@ -227,7 +282,7 @@
     if (!heatmapCanvas || !plotW || windowEnd <= windowStart) return
     e.preventDefault()
     const rect = heatmapCanvas.getBoundingClientRect()
-    const scaleX = heatmapCanvas.width / rect.width
+    const scaleX = (heatmapCanvas.width / dpr) / rect.width
     const mouseX = (e.clientX - rect.left) * scaleX - paddingLeft
     const centerRatio = Math.max(0, Math.min(1, mouseX / plotW))
     const span = windowEnd - windowStart
@@ -240,24 +295,46 @@
     onTimeWindowChange(newStart, newEnd)
   }
 
+  function scheduleDraw() {
+    if (pendingRedraw) return
+    pendingRedraw = true
+    requestAnimationFrame(() => {
+      pendingRedraw = false
+      if (heatmapCtx && heatmapCanvas) drawHeatmap()
+      if (bubblesCtx && bubblesCanvas) drawBubbles()
+      if (plotH > 0) notifyScale()
+    })
+  }
+
+  /** Expose heatmap canvas for AI snapshot capture (toBlob). */
+  export function getHeatmapCanvas(): HTMLCanvasElement | null {
+    return heatmapCanvas ?? null
+  }
+
   function resize() {
     if (!container || !heatmapCanvas || !bubblesCanvas) return
     const rect = container.getBoundingClientRect()
-    const width = Math.floor(rect.width)
-    const height = Math.max(200, Math.floor(rect.height))
-    heatmapCanvas.width = width
-    heatmapCanvas.height = height
-    heatmapCanvas.style.width = width + 'px'
-    heatmapCanvas.style.height = height + 'px'
-    bubblesCanvas.width = width
-    bubblesCanvas.height = height
-    bubblesCanvas.style.width = width + 'px'
-    bubblesCanvas.style.height = height + 'px'
-    plotW = width - paddingLeft - paddingRight
-    plotH = height - paddingTop - paddingBottom
-    drawHeatmap()
-    drawBubbles()
-    notifyScale()
+    const logicalW = Math.floor(rect.width)
+    const logicalH = Math.max(200, Math.floor(rect.height))
+    heatmapCanvas.width = logicalW * dpr
+    heatmapCanvas.height = logicalH * dpr
+    heatmapCanvas.style.width = logicalW + 'px'
+    heatmapCanvas.style.height = logicalH + 'px'
+    bubblesCanvas.width = logicalW * dpr
+    bubblesCanvas.height = logicalH * dpr
+    bubblesCanvas.style.width = logicalW + 'px'
+    bubblesCanvas.style.height = logicalH + 'px'
+    if (heatmapCtx) {
+      heatmapCtx.setTransform(1, 0, 0, 1, 0, 0)
+      heatmapCtx.scale(dpr, dpr)
+    }
+    if (bubblesCtx) {
+      bubblesCtx.setTransform(1, 0, 0, 1, 0, 0)
+      bubblesCtx.scale(dpr, dpr)
+    }
+    plotW = logicalW - paddingLeft - paddingRight
+    plotH = logicalH - paddingTop - paddingBottom
+    scheduleDraw()
   }
 
   let ro: ResizeObserver | null = null
@@ -272,10 +349,8 @@
     ro?.disconnect()
   })
 
-  $: if (slices.length || candles.length) {
-    if (heatmapCtx && heatmapCanvas) drawHeatmap()
-    if (bubblesCtx && bubblesCanvas) drawBubbles()
-    if (plotH > 0) notifyScale()
+  $: if (slices.length || candles.length || trades.length || bubbleMode === 'off') {
+    scheduleDraw()
   }
 </script>
 

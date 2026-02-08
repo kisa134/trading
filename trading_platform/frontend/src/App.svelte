@@ -6,7 +6,7 @@
   import Events from './components/Events.svelte'
   import TrendAI from './components/TrendAI.svelte'
   import ChartHeatmapBubbles from './components/ChartHeatmapBubbles.svelte'
-  import { wsUrl, fetchBybitSymbols, fetchKline, type Candle } from './lib/api'
+  import { wsUrl, fetchBybitSymbols, fetchKline, fetchImbalance, uploadSnapshot, type Candle } from './lib/api'
   import { formatTime } from './lib/format'
   import Dashboard from './components/Dashboard.svelte'
 
@@ -26,7 +26,7 @@
   let candles: Candle[] = []
   let domDepth = 20
 
-  let activeTab: 'Flow' | 'Dashboard' | 'TrendAI' | 'Footprint' | 'MLLab' | 'Logs' = 'Flow'
+  let activeTab: 'Flow' | 'Dashboard' | 'TrendAI' | 'Footprint' | 'MLLab' | 'Logs' | 'AI' = 'Flow'
 
   const channels = [
     'orderbook_realtime',
@@ -37,6 +37,7 @@
     'scores',
     'exhaustion_absorption',
     'signals',
+    'ai_response',
   ]
   const maxTrades = 200
   const maxHeatmap = 150
@@ -61,6 +62,14 @@
   let menuOpen = false
 
   let chartScale = { priceMin: 0, priceMax: 1, plotH: 300 }
+  let bubbleMode: 'off' | 'candles' | 'trades' = 'candles'
+  let imbalanceCurrent: { imbalance_pct: number } | null = null
+  let chartHeatmapBubblesRef: import('./components/ChartHeatmapBubbles.svelte').default | null = null
+  let snapshotIntervalId: ReturnType<typeof setInterval> | null = null
+  const SNAPSHOT_INTERVAL_MS = 20000
+  const LARGE_TRADE_MULT = 2.5
+  let aiResponseText = ''
+  let aiResponseTs = 0
   $: lastPrice =
     trades[0]?.price ??
     (dom?.bids?.[0]?.[0] != null && dom?.asks?.[0]?.[0] != null
@@ -70,6 +79,31 @@
   function setDomDepthFromSelect(e: Event) {
     const el = e.currentTarget as HTMLSelectElement
     if (el) domDepth = Number(el.value)
+  }
+
+  function captureAndUploadSnapshot(trigger: 'timer' | 'volume_spike' | 'manual') {
+    const canvas = chartHeatmapBubblesRef?.getHeatmapCanvas?.()
+    if (!canvas || canvas.width === 0 || canvas.height === 0) return
+    canvas.toBlob(
+      (blob) => {
+        if (!blob) return
+        const reader = new FileReader()
+        reader.onloadend = () => {
+          const base64 = (reader.result as string)?.split(',')[1]
+          if (!base64) return
+          uploadSnapshot({
+            exchange,
+            symbol,
+            imageBase64: base64,
+            ts: Date.now(),
+            trigger,
+          }).catch(() => {})
+        }
+        reader.readAsDataURL(blob)
+      },
+      'image/jpeg',
+      0.85
+    )
   }
 
   const normalizeTs = (ts: number) => (ts < 10_000_000_000 ? ts * 1000 : ts)
@@ -136,6 +170,12 @@
         }
         if (stream === 'trades' || stream === 'trades_realtime') {
           trades = [data, ...trades].slice(0, maxTrades)
+          const size = data?.size ?? data?.volume ?? 0
+          if (size > 0 && trades.length >= 5) {
+            const recent = trades.slice(0, 20).map((t: { size?: number }) => t.size ?? 0).filter(Boolean)
+            const avg = recent.length ? recent.reduce((a: number, b: number) => a + b, 0) / recent.length : 0
+            if (avg > 0 && size >= avg * LARGE_TRADE_MULT) captureAndUploadSnapshot('volume_spike')
+          }
           return
         }
         if (stream === 'heatmap_slices' || stream === 'heatmap_stream') {
@@ -160,6 +200,10 @@
         }
         if (stream === 'signals.rule_reversal') {
           ruleSignals = [...ruleSignals, data].slice(-200)
+        }
+        if (stream === 'ai_response' && data?.text != null) {
+          aiResponseText = data.text
+          aiResponseTs = Date.now()
         }
       } catch (_) {}
     }
@@ -191,11 +235,21 @@
     }
   }
 
+  async function loadImbalance() {
+    try {
+      const res = await fetchImbalance(exchange, symbol, 0)
+      imbalanceCurrent = res?.current ? { imbalance_pct: res.current.imbalance_pct } : null
+    } catch {
+      imbalanceCurrent = null
+    }
+  }
+
   function handleExchangeChange() {
     isLive = true
     connect()
     loadSymbols()
     loadCandles()
+    loadImbalance()
   }
 
   function applySymbol(next: string) {
@@ -205,6 +259,7 @@
     isLive = true
     connect()
     loadCandles()
+    loadImbalance()
   }
 
   function onSymbolKeydown(e: KeyboardEvent) {
@@ -221,15 +276,23 @@
     if (!document.querySelector('.status-menu-wrap')?.contains(t)) menuOpen = false
   }
 
+  let imbalanceInterval: ReturnType<typeof setInterval> | null = null
   onMount(() => {
     connect()
     loadSymbols()
     loadCandles()
+    loadImbalance()
     window.addEventListener('click', handleClickOutside)
+    imbalanceInterval = setInterval(() => {
+      if (activeTab === 'Flow') loadImbalance()
+    }, 2000)
+    snapshotIntervalId = setInterval(() => captureAndUploadSnapshot('timer'), SNAPSHOT_INTERVAL_MS)
   })
   onDestroy(() => {
     if (ws) ws.close()
     window.removeEventListener('click', handleClickOutside)
+    if (imbalanceInterval) clearInterval(imbalanceInterval)
+    if (snapshotIntervalId) clearInterval(snapshotIntervalId)
   })
 </script>
 
@@ -312,6 +375,7 @@
   <button class:active={activeTab === 'TrendAI'} on:click={() => (activeTab = 'TrendAI')}>Trend AI</button>
   <button class:active={activeTab === 'Footprint'} on:click={() => (activeTab = 'Footprint')}>Footprint</button>
   <button class:active={activeTab === 'MLLab'} on:click={() => (activeTab = 'MLLab')}>ML Lab</button>
+  <button class:active={activeTab === 'AI'} on:click={() => (activeTab = 'AI')}>AI</button>
   <button class:active={activeTab === 'Logs'} on:click={() => (activeTab = 'Logs')}>Logs</button>
 </div>
 
@@ -319,17 +383,31 @@
   <div class="layout layout-unified">
     <aside class="left panel panel-left-unified" style="width: 240px;">
       <div class="panel-title">Events · {symbol}</div>
-      <Events items={viewEvents} />
+      <div class="events-wrap"><Events items={viewEvents} /></div>
       <div class="panel-title" style="margin-top: 8px;">Tape · {symbol}</div>
-      <Tape trades={viewTrades} />
+      <div class="tape-wrap"><Tape trades={viewTrades} /></div>
       <div class="panel-title" style="margin-top: 8px;">Footprint</div>
-      <Footprint bars={viewFootprint} />
+      <div class="footprint-wrap"><Footprint bars={viewFootprint} /></div>
     </aside>
     <main class="center panel center-unified">
-      <div class="panel-title">Heatmap + Volume · {symbol} · {timeframe} · {isLive ? 'Live' : 'Paused'}</div>
+      <div class="panel-title chart-title-row">
+        <span>Heatmap + Volume · {symbol} · {timeframe} · {isLive ? 'Live' : 'Paused'}</span>
+        <button type="button" class="ai-snapshot-btn-inline" on:click={() => captureAndUploadSnapshot('manual')} title="Отправить снимок ИИ">Снимок для ИИ</button>
+        <span class="imbalance-indicator" class:positive={imbalanceCurrent != null && imbalanceCurrent.imbalance_pct > 0} class:negative={imbalanceCurrent != null && imbalanceCurrent.imbalance_pct < 0}>
+          {imbalanceCurrent != null ? `Imbalance: ${imbalanceCurrent.imbalance_pct >= 0 ? '+' : ''}${imbalanceCurrent.imbalance_pct.toFixed(1)}%` : 'Imbalance: —'}
+        </span>
+        <select class="bubble-mode-select" bind:value={bubbleMode} title="Пузырьки">
+          <option value="off">Пузырьки: выкл</option>
+          <option value="candles">По свечам</option>
+          <option value="trades">По сделкам</option>
+        </select>
+      </div>
       <ChartHeatmapBubbles
+        bind:this={chartHeatmapBubblesRef}
         slices={viewHeatmap}
         candles={candles}
+        trades={viewTrades}
+        {bubbleMode}
         {windowStart}
         {windowEnd}
         onTimeWindowChange={setTimeWindow}
@@ -391,6 +469,22 @@
     <div class="panel" style="flex: 1; padding: 12px;">
       <div class="panel-title">ML Lab</div>
       <div class="placeholder">Mamba и метрики будут добавлены в v2.</div>
+    </div>
+  </div>
+{:else if activeTab === 'AI'}
+  <div class="layout single">
+    <div class="panel ai-panel" style="flex: 1; padding: 12px; display: flex; flex-direction: column;">
+      <div class="panel-title">AI · {symbol}</div>
+      <p class="ai-hint">Ответы приходят после каждого снимка. Ручной снимок: вкладка Flow → кнопка «Снимок для ИИ».</p>
+      <button type="button" class="ai-snapshot-btn" on:click={() => captureAndUploadSnapshot('manual')}>Сделать снимок сейчас</button>
+      <div class="ai-response-box">
+        {#if aiResponseTs > 0}
+          <div class="ai-meta">Обновлено: {formatTime(aiResponseTs)}</div>
+          <div class="ai-text">{aiResponseText}</div>
+        {:else}
+          <div class="placeholder">Ожидание ответа ИИ… Подключитесь и откройте Flow для отправки снимков.</div>
+        {/if}
+      </div>
     </div>
   </div>
 {:else if activeTab === 'Logs'}
@@ -542,9 +636,18 @@
   .layout-unified { align-items: stretch; }
   .left { flex: 0 0 auto; border-right: none; overflow: auto; min-width: 120px; }
   .panel-left-unified { display: flex; flex-direction: column; overflow-y: auto; }
+  .panel-left-unified .panel-title { flex-shrink: 0; }
+  .panel-left-unified .events-wrap { max-height: 180px; overflow-y: auto; min-height: 0; }
+  .panel-left-unified .tape-wrap { max-height: 220px; overflow-y: auto; min-height: 0; }
+  .panel-left-unified .footprint-wrap { max-height: 200px; overflow-y: auto; min-height: 0; }
   .resizer { width: 6px; flex-shrink: 0; cursor: col-resize; background: var(--border); }
   .resizer:hover { background: var(--accent); }
   .dom-title { display: flex; justify-content: space-between; align-items: center; }
+  .chart-title-row { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; }
+  .bubble-mode-select { padding: 2px 6px; font-size: 11px; background: #020202; border: 1px solid var(--border-strong); color: var(--text); }
+  .imbalance-indicator { font-size: 11px; font-variant-numeric: tabular-nums; }
+  .imbalance-indicator.positive { color: var(--buy); }
+  .imbalance-indicator.negative { color: var(--sell); }
   .depth-select { padding: 2px 4px; font-size: 10px; background: #020202; border: 1px solid var(--border-strong); color: var(--text); }
   .center { flex: 1; min-width: 0; display: flex; flex-direction: column; overflow: hidden; }
   .center-unified { display: flex; flex-direction: column; min-height: 0; }
@@ -580,4 +683,10 @@
   .heatmap-panel-title { display: flex; justify-content: space-between; align-items: center; }
   .panel-actions { display: flex; gap: 4px; }
   .panel-actions .small { padding: 2px 6px; font-size: 10px; }
+  .ai-panel .ai-hint { color: var(--text-muted); font-size: 12px; margin: 0 0 8px 0; }
+  .ai-snapshot-btn { margin-bottom: 12px; align-self: flex-start; }
+  .ai-snapshot-btn-inline { margin-left: 8px; font-size: 11px; padding: 2px 8px; }
+  .ai-response-box { flex: 1; min-height: 120px; border: 1px solid var(--border); background: #080808; padding: 12px; border-radius: 4px; overflow-y: auto; }
+  .ai-meta { font-size: 10px; color: var(--text-muted); margin-bottom: 8px; }
+  .ai-text { white-space: pre-wrap; word-break: break-word; font-size: 13px; line-height: 1.5; }
 </style>

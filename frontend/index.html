@@ -1,0 +1,768 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Квадраты аномального объема</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { background: #0d1117; color: #c9d1d9; font-family: system-ui, sans-serif; min-height: 100vh; display: flex; flex-direction: column; }
+    header {
+      padding: 0.75rem 1rem; border-bottom: 1px solid #21262d;
+      display: flex; flex-wrap: wrap; align-items: center; gap: 1rem; row-gap: 0.5rem;
+    }
+    h1 { font-size: 1rem; font-weight: 600; }
+    .status { font-size: 0.875rem; color: #8b949e; }
+    .status.connected { color: #3fb950; }
+    .status.error { color: #f85149; }
+    .price-current { font-weight: 600; font-size: 1.1rem; }
+    .price-up { color: #3fb950; }
+    .price-down { color: #f85149; }
+    .delta { font-size: 0.875rem; color: #8b949e; }
+    .delta span { margin-right: 0.5rem; }
+    .legend { font-size: 0.75rem; color: #8b949e; max-width: 320px; }
+    .controls { display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; }
+    .controls label { font-size: 0.8rem; color: #8b949e; display: flex; align-items: center; gap: 0.35rem; }
+    .controls input[type="range"] { width: 100px; }
+    .controls select { background: #21262d; color: #c9d1d9; border: 1px solid #30363d; padding: 0.25rem 0.5rem; border-radius: 4px; font-size: 0.8rem; }
+    main { flex: 1; display: flex; flex-direction: column; min-height: 0; padding: 0.5rem; }
+    .chart-wrap { position: relative; flex: 1; min-height: 300px; }
+    #canvas { display: block; width: 100%; height: 100%; border-radius: 8px; background: #161b22; cursor: crosshair; }
+    #tooltip {
+      position: absolute; pointer-events: none;
+      background: rgba(22, 27, 34, 0.95); border: 1px solid #30363d; border-radius: 6px;
+      padding: 0.5rem 0.75rem; font-size: 0.8rem; white-space: nowrap; z-index: 10;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.3); display: none;
+    }
+    #tooltip.visible { display: block; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Квадраты аномального объема</h1>
+    <span id="status" class="status">Отключено</span>
+    <span id="priceEl" class="price-current">—</span>
+    <span id="deltaEl" class="delta"></span>
+    <span id="orderbookEl" class="delta" style="min-width: 90px;"></span>
+    <span class="legend" id="legendEl">Зелёный = покупка, красный = продажа. Ярче = выше аномалия объёма, размер = объём.</span>
+    <div class="controls">
+      <label>Масштаб цены:
+        <select id="scaleMode">
+          <option value="auto">Авто</option>
+          <option value="fixed">Фикс ±0.1%</option>
+        </select>
+      </label>
+      <label>Порог аномалии: <span id="anomalyVal">0</span>
+        <input type="range" id="anomalySlider" min="0" max="5" step="0.1" value="0">
+      </label>
+      <label>Стакан:
+        <select id="depthViewMode">
+          <option value="bars">Полосы</option>
+          <option value="area">Область</option>
+          <option value="line">Линия</option>
+          <option value="dots">Точки</option>
+        </select>
+      </label>
+      <label>Режим:
+        <select id="viewMode">
+          <option value="stream">Поток сделок</option>
+          <option value="heatmap">Heatmap стакана</option>
+          <option value="candles">Классические свечи</option>
+          <option value="footprint">Footprint</option>
+        </select>
+      </label>
+    </div>
+  </header>
+  <main>
+    <div class="chart-wrap">
+      <canvas id="canvas"></canvas>
+      <div id="tooltip"></div>
+    </div>
+  </main>
+  <script>
+    (function () {
+      const WS_URL = 'ws://localhost:8765';
+      const MAX_TRADES = 1000;
+      const ANOMALY_CAP = 5;
+      const OPACITY_MIN = 0.2;
+      const OPACITY_RANGE = 0.8;
+      const SIZE_BASE = 3;
+      const SIZE_SCALE = 6;
+      const VOLUME_POWER = 0.5;
+      const DEPTH_BAR_WIDTH = 80;
+      const PAD_RIGHT = 58 + DEPTH_BAR_WIDTH;
+      const PAD_BOTTOM = 26;
+      const PAD_LEFT = 8 + DEPTH_BAR_WIDTH;
+      const PAD_TOP = 8;
+      const FIXED_PERCENT = 0.1;
+      const THROTTLE_MS = 33;
+      const HOVER_RADIUS = 24;
+
+      const canvas = document.getElementById('canvas');
+      const ctx = canvas.getContext('2d');
+      const statusEl = document.getElementById('status');
+      const priceEl = document.getElementById('priceEl');
+      const deltaEl = document.getElementById('deltaEl');
+      const orderbookEl = document.getElementById('orderbookEl');
+      const tooltipEl = document.getElementById('tooltip');
+      const scaleModeEl = document.getElementById('scaleMode');
+      const anomalySliderEl = document.getElementById('anomalySlider');
+      const anomalyValEl = document.getElementById('anomalyVal');
+      const depthViewModeEl = document.getElementById('depthViewMode');
+      const viewModeEl = document.getElementById('viewMode');
+
+      const MAX_ORDERBOOK_HISTORY = 300;
+      const HEATMAP_PRICE_BINS = 80;
+
+      let trades = [];
+      let orderbookHistory = [];
+      let ws = null;
+      let rafScheduled = false;
+      let lastDrawTime = 0;
+      let scaleMode = 'auto';
+      let anomalyThreshold = 0;
+      let depthViewMode = 'bars';
+      let viewMode = 'stream';
+      let zoomPrice = 1;
+      let panPrice = 0;
+      let isDragging = false;
+      let lastMouseY = 0;
+      let lastPriceCenter = 0;
+      let hoveredTrade = null;
+      let chartRect = { left: 0, top: 0, width: 0, height: 0 };
+      let pMin = 0, pMax = 1;
+      let tMin = 0, tMax = 1;
+      let dpr = Math.min(2, window.devicePixelRatio || 1);
+      let logicalWidth = 800, logicalHeight = 500;
+      let orderbook = { bids: [], asks: [] };
+      let icebergs = [];
+      let candles = [];
+      let footprints = {};
+
+      function setStatus(text, className) {
+        statusEl.textContent = text;
+        statusEl.className = 'status ' + (className || '');
+      }
+
+      function getChartRect() {
+        return {
+          left: PAD_LEFT,
+          top: PAD_TOP,
+          width: logicalWidth - PAD_LEFT - PAD_RIGHT,
+          height: logicalHeight - PAD_TOP - PAD_BOTTOM,
+        };
+      }
+
+      function priceToY(price) {
+        if (pMax <= pMin) return chartRect.top + chartRect.height / 2;
+        const t = (price - pMin) / (pMax - pMin);
+        return chartRect.top + chartRect.height * (1 - t);
+      }
+
+      function yToPrice(y) {
+        if (pMax <= pMin) return (pMin + pMax) / 2;
+        const t = 1 - (y - chartRect.top) / chartRect.height;
+        return pMin + t * (pMax - pMin);
+      }
+
+      function timeToX(ts) {
+        if (tMax <= tMin) return chartRect.left;
+        const t = (ts - tMin) / (tMax - tMin);
+        return chartRect.left + t * chartRect.width;
+      }
+
+      function volumeToSize(volume) {
+        const s = SIZE_BASE + SIZE_SCALE * Math.pow(volume, VOLUME_POWER);
+        return Math.max(2, Math.min(32, s));
+      }
+
+      function anomalyToOpacity(score) {
+        const t = Math.min(score / ANOMALY_CAP, 1);
+        return OPACITY_MIN + OPACITY_RANGE * t;
+      }
+
+      function formatPrice(p) {
+        if (p >= 1000) return p.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 });
+        if (p >= 1) return p.toFixed(2);
+        return p.toFixed(4);
+      }
+
+      function formatTime(ts) {
+        const age = (Date.now() - ts) / 1000;
+        if (age < 60) return Math.round(age) + ' с';
+        if (age < 3600) return Math.round(age / 60) + ' мин';
+        return Math.round(age / 3600) + ' ч';
+      }
+
+      function draw() {
+        rafScheduled = false;
+        const now = Date.now();
+        if (now - lastDrawTime < THROTTLE_MS) {
+          rafScheduled = true;
+          requestAnimationFrame(draw);
+          return;
+        }
+        lastDrawTime = now;
+
+        chartRect = getChartRect();
+        const w = canvas.width;
+        const h = canvas.height;
+
+        ctx.fillStyle = '#161b22';
+        ctx.fillRect(0, 0, w, h);
+
+        const hasOrderbook = orderbook.bids.length > 0 || orderbook.asks.length > 0;
+        orderbookEl.textContent = hasOrderbook ? ('Стакан: ' + orderbook.bids.length + ' / ' + orderbook.asks.length) : 'Стакан: —';
+        const hasCandles = viewMode === 'candles' || viewMode === 'footprint' ? candles.length > 0 : false;
+        const hasHeatmapData = viewMode === 'heatmap' && orderbookHistory.length > 0;
+        if (trades.length === 0 && !hasOrderbook && !hasCandles && !hasHeatmapData) {
+          ctx.fillStyle = '#8b949e';
+          ctx.font = '14px system-ui';
+          ctx.textAlign = 'center';
+          ctx.fillText('Ожидание сделок…', logicalWidth / 2, logicalHeight / 2);
+          return;
+        }
+
+        const prices = trades.length ? trades.map(t => t.price) : [];
+        const lastPrice = prices.length ? prices[prices.length - 1] : null;
+        const firstPrice = prices.length ? prices[0] : null;
+        let hasTs = false;
+        if (trades.length > 0) {
+          hasTs = trades.some(t => t.ts);
+          if (hasTs) {
+            tMin = Math.min(...trades.map(t => t.ts || 0));
+            tMax = Math.max(...trades.map(t => t.ts || 0));
+            if (tMax <= tMin) tMax = tMin + 1;
+          } else {
+            tMin = 0;
+            tMax = trades.length;
+          }
+        } else {
+          tMin = 0;
+          tMax = 1;
+        }
+
+        if ((viewMode === 'candles' || viewMode === 'footprint') && candles.length > 0) {
+          const lo = Math.min(...candles.map(c => c.low));
+          const hi = Math.max(...candles.map(c => c.high));
+          const pad = (hi - lo) * 0.02 || 1;
+          pMin = lo - pad;
+          pMax = hi + pad;
+          tMin = candles[0].start;
+          tMax = candles[candles.length - 1].start + 60000;
+          if (tMax <= tMin) tMax = tMin + 60000;
+        } else if (trades.length > 0 && lastPrice != null) {
+          if (scaleMode === 'fixed') {
+            const half = (lastPrice * FIXED_PERCENT) / 100;
+            pMin = lastPrice - half;
+            pMax = lastPrice + half;
+            if (pMin <= 0) pMin = pMax * 0.5;
+          } else {
+            const priceMin = Math.min(...prices);
+            const priceMax = Math.max(...prices);
+            const pad = (priceMax - priceMin) * 0.02 || lastPrice * 0.0001;
+            pMin = priceMin - pad;
+            pMax = priceMax + pad;
+            const range = pMax - pMin;
+            pMin += panPrice * range;
+            pMax += panPrice * range;
+            const center = (pMin + pMax) / 2;
+            const half = (range * zoomPrice) / 2;
+            pMin = center - half;
+            pMax = center + half;
+          }
+        } else if (hasOrderbook) {
+          let lo = Infinity, hi = -Infinity;
+          orderbook.bids.forEach(entry => { const p = entry[0]; lo = Math.min(lo, p); hi = Math.max(hi, p); });
+          orderbook.asks.forEach(entry => { const p = entry[0]; lo = Math.min(lo, p); hi = Math.max(hi, p); });
+          const pad = (hi - lo) * 0.02 || 1;
+          pMin = lo - pad;
+          pMax = hi + pad;
+        } else if (viewMode === 'heatmap' && orderbookHistory.length > 0) {
+          let lo = Infinity, hi = -Infinity;
+          orderbookHistory.forEach(snap => {
+            (snap.bids || []).forEach(entry => { const p = Number(entry[0]); lo = Math.min(lo, p); hi = Math.max(hi, p); });
+            (snap.asks || []).forEach(entry => { const p = Number(entry[0]); lo = Math.min(lo, p); hi = Math.max(hi, p); });
+          });
+          const pad = (hi - lo) * 0.02 || 1;
+          pMin = lo - pad;
+          pMax = hi + pad;
+        }
+
+        ctx.strokeStyle = '#21262d';
+        ctx.lineWidth = 1;
+        for (let i = 1; i <= 4; i++) {
+          const y = chartRect.top + (chartRect.height * i) / 5;
+          ctx.beginPath();
+          ctx.moveTo(chartRect.left, y);
+          ctx.lineTo(chartRect.left + chartRect.width, y);
+          ctx.stroke();
+        }
+        for (let i = 1; i <= 4; i++) {
+          const x = chartRect.left + (chartRect.width * i) / 5;
+          ctx.beginPath();
+          ctx.moveTo(x, chartRect.top);
+          ctx.lineTo(x, chartRect.top + chartRect.height);
+          ctx.stroke();
+        }
+
+        ctx.fillStyle = '#8b949e';
+        ctx.font = '11px system-ui';
+        ctx.textAlign = 'right';
+        for (let i = 0; i <= 5; i++) {
+          const p = pMin + (pMax - pMin) * (1 - i / 5);
+          const y = chartRect.top + (chartRect.height * i) / 5;
+          ctx.fillText(formatPrice(p), logicalWidth - 6, y + 4);
+        }
+
+        ctx.textAlign = 'center';
+        ctx.fillStyle = '#8b949e';
+        if (trades.length > 0 && hasTs && tMax > tMin && tMax > 0) {
+          for (let i = 0; i <= 4; i++) {
+            const ts = tMin + (tMax - tMin) * (i / 4);
+            const x = chartRect.left + (chartRect.width * i) / 4;
+            ctx.fillText('−' + formatTime(ts).replace(' с', 'с').replace(' мин', 'м').replace(' ч', 'ч'), x, logicalHeight - 6);
+          }
+          ctx.fillText('сейчас', chartRect.left + chartRect.width, logicalHeight - 6);
+        }
+
+        if (viewMode === 'heatmap' && orderbookHistory.length > 0 && pMax > pMin) {
+          const L = orderbookHistory.length;
+          const numBins = HEATMAP_PRICE_BINS;
+          const gridBid = Array(L).fill(0).map(() => Array(numBins).fill(0));
+          const gridAsk = Array(L).fill(0).map(() => Array(numBins).fill(0));
+          const range = pMax - pMin || 1;
+          orderbookHistory.forEach((snap, ti) => {
+            (snap.bids || []).forEach(entry => {
+              const p = Number(entry[0]), s = Number(entry[1]);
+              const pb = Math.max(0, Math.min(numBins - 1, Math.floor((p - pMin) / range * numBins)));
+              gridBid[ti][pb] += s;
+            });
+            (snap.asks || []).forEach(entry => {
+              const p = Number(entry[0]), s = Number(entry[1]);
+              const pb = Math.max(0, Math.min(numBins - 1, Math.floor((p - pMin) / range * numBins)));
+              gridAsk[ti][pb] += s;
+            });
+          });
+          let maxBid = 0, maxAsk = 0;
+          for (let ti = 0; ti < L; ti++) for (let pb = 0; pb < numBins; pb++) {
+            maxBid = Math.max(maxBid, gridBid[ti][pb]);
+            maxAsk = Math.max(maxAsk, gridAsk[ti][pb]);
+          }
+          maxBid = maxBid || 1;
+          maxAsk = maxAsk || 1;
+          const cellW = chartRect.width / L;
+          const cellH = chartRect.height / numBins;
+          for (let ti = 0; ti < L; ti++) {
+            for (let pb = 0; pb < numBins; pb++) {
+              const x = chartRect.left + ti * cellW;
+              const y = chartRect.top + (numBins - 1 - pb) * cellH;
+              const ab = gridBid[ti][pb] / maxBid * 0.5;
+              const aa = gridAsk[ti][pb] / maxAsk * 0.5;
+              if (ab > 0.01) {
+                ctx.fillStyle = 'rgba(34, 197, 94, ' + ab + ')';
+                ctx.fillRect(x, y, cellW + 1, cellH + 1);
+              }
+              if (aa > 0.01) {
+                ctx.fillStyle = 'rgba(248, 81, 73, ' + aa + ')';
+                ctx.fillRect(x, y, cellW + 1, cellH + 1);
+              }
+            }
+          }
+        }
+
+        if (viewMode === 'candles' && candles.length > 0 && pMax > pMin && tMax > tMin) {
+          const cw = chartRect.width / candles.length;
+          const maxVol = Math.max(...candles.map(c => c.volume), 1);
+          candles.forEach((c, i) => {
+            const x = chartRect.left + (c.start - tMin) / (tMax - tMin) * chartRect.width;
+            const openY = priceToY(c.open);
+            const closeY = priceToY(c.close);
+            const highY = priceToY(c.high);
+            const lowY = priceToY(c.low);
+            const isGreen = c.close >= c.open;
+            ctx.strokeStyle = isGreen ? 'rgba(34, 197, 94, 0.9)' : 'rgba(248, 81, 73, 0.9)';
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            ctx.moveTo(x + cw / 2, highY);
+            ctx.lineTo(x + cw / 2, lowY);
+            ctx.stroke();
+            const bodyTop = Math.min(openY, closeY);
+            const bodyH = Math.max(Math.abs(closeY - openY), 1);
+            ctx.fillStyle = isGreen ? 'rgba(34, 197, 94, 0.7)' : 'rgba(248, 81, 73, 0.7)';
+            ctx.fillRect(x + 1, bodyTop, cw - 2, bodyH);
+            const volH = (c.volume / maxVol) * 20;
+            ctx.fillStyle = 'rgba(139, 148, 158, 0.4)';
+            ctx.fillRect(x + 1, chartRect.top + chartRect.height - volH, cw - 2, volH);
+          });
+        }
+
+        if (viewMode === 'footprint' && candles.length > 0 && pMax > pMin && tMax > tMin) {
+          const cw = chartRect.width / candles.length;
+          let maxBidAsk = 1;
+          candles.forEach(c => {
+            const fp = footprints[c.start];
+            if (fp && fp.levels) fp.levels.forEach(l => { maxBidAsk = Math.max(maxBidAsk, l.bidVol || 0, l.askVol || 0); });
+          });
+          const barH = Math.max(2, chartRect.height / 80);
+          candles.forEach((c, i) => {
+            const x = chartRect.left + (c.start - tMin) / (tMax - tMin) * chartRect.width;
+            const fp = footprints[c.start];
+            if (!fp || !fp.levels.length) {
+              ctx.fillStyle = 'rgba(139, 148, 158, 0.2)';
+              ctx.fillRect(x, chartRect.top, cw, chartRect.height);
+              return;
+            }
+            fp.levels.forEach(l => {
+              const price = Number(l.price);
+              if (price < pMin || price > pMax) return;
+              const y = priceToY(price);
+              const bw = (l.bidVol || 0) / maxBidAsk * (cw / 2);
+              const aw = (l.askVol || 0) / maxBidAsk * (cw / 2);
+              ctx.fillStyle = 'rgba(34, 197, 94, 0.5)';
+              ctx.fillRect(x + cw / 2 - bw, y - barH / 2, bw, barH);
+              ctx.fillStyle = 'rgba(248, 81, 73, 0.5)';
+              ctx.fillRect(x + cw / 2, y - barH / 2, aw, barH);
+            });
+          });
+        }
+
+        if (viewMode === 'stream' && hasOrderbook && pMax > pMin) {
+          const bidsInRange = orderbook.bids.filter(entry => { const p = Number(entry[0]); return p >= pMin && p <= pMax; });
+          const asksInRange = orderbook.asks.filter(entry => { const p = Number(entry[0]); return p >= pMin && p <= pMax; });
+          const maxBidVol = bidsInRange.length ? Math.max(...bidsInRange.map(e => e[1])) : 1;
+          const maxAskVol = asksInRange.length ? Math.max(...asksInRange.map(e => e[1])) : 1;
+          let cumBid = 0, cumAsk = 0;
+          const totalBidVol = bidsInRange.reduce((s, e) => s + e[1], 0);
+          const totalAskVol = asksInRange.reduce((s, e) => s + e[1], 0);
+
+          ctx.fillStyle = 'rgba(34, 197, 94, 0.08)';
+          ctx.fillRect(0, chartRect.top, chartRect.left, chartRect.height);
+          ctx.fillStyle = 'rgba(248, 81, 73, 0.08)';
+          ctx.fillRect(chartRect.left + chartRect.width, chartRect.top, logicalWidth - (chartRect.left + chartRect.width), chartRect.height);
+          if (depthViewMode === 'bars') {
+            const barHeight = Math.max(2, chartRect.height / Math.max(bidsInRange.length + asksInRange.length, 1) * 0.9);
+            bidsInRange.forEach(entry => {
+              const price = Number(entry[0]), size = Number(entry[1]);
+              const y = priceToY(price);
+              const length = Math.max(2, (size / maxBidVol) * DEPTH_BAR_WIDTH);
+              ctx.fillStyle = 'rgba(34, 197, 94, 0.55)';
+              ctx.fillRect(chartRect.left - length, y - barHeight / 2, length, barHeight);
+            });
+            asksInRange.forEach(entry => {
+              const price = Number(entry[0]), size = Number(entry[1]);
+              const y = priceToY(price);
+              const length = Math.max(2, (size / maxAskVol) * DEPTH_BAR_WIDTH);
+              ctx.fillStyle = 'rgba(248, 81, 73, 0.55)';
+              ctx.fillRect(chartRect.left + chartRect.width, y - barHeight / 2, length, barHeight);
+            });
+          } else if (depthViewMode === 'area') {
+            ctx.fillStyle = 'rgba(34, 197, 94, 0.25)';
+            ctx.beginPath();
+            ctx.moveTo(chartRect.left, chartRect.top + chartRect.height);
+            cumBid = 0;
+            bidsInRange.forEach(entry => {
+              cumBid += Number(entry[1]);
+              const x = chartRect.left - (cumBid / totalBidVol) * DEPTH_BAR_WIDTH;
+              ctx.lineTo(x, priceToY(Number(entry[0])));
+            });
+            ctx.lineTo(chartRect.left - (cumBid / totalBidVol) * DEPTH_BAR_WIDTH, chartRect.top + chartRect.height);
+            ctx.closePath();
+            ctx.fill();
+            ctx.fillStyle = 'rgba(248, 81, 73, 0.25)';
+            ctx.beginPath();
+            ctx.moveTo(chartRect.left + chartRect.width, chartRect.top + chartRect.height);
+            cumAsk = 0;
+            asksInRange.forEach(entry => {
+              cumAsk += Number(entry[1]);
+              const x = chartRect.left + chartRect.width + (cumAsk / totalAskVol) * DEPTH_BAR_WIDTH;
+              ctx.lineTo(x, priceToY(Number(entry[0])));
+            });
+            ctx.lineTo(chartRect.left + chartRect.width + (cumAsk / totalAskVol) * DEPTH_BAR_WIDTH, chartRect.top + chartRect.height);
+            ctx.closePath();
+            ctx.fill();
+          } else if (depthViewMode === 'line') {
+            ctx.strokeStyle = 'rgba(34, 197, 94, 0.7)';
+            ctx.lineWidth = 1.5;
+            ctx.beginPath();
+            cumBid = 0;
+            bidsInRange.forEach((entry, i) => {
+              cumBid += Number(entry[1]);
+              const x = chartRect.left - (cumBid / totalBidVol) * DEPTH_BAR_WIDTH;
+              const y = priceToY(Number(entry[0]));
+              if (i === 0) ctx.moveTo(x, y);
+              else ctx.lineTo(x, y);
+            });
+            ctx.stroke();
+            ctx.strokeStyle = 'rgba(248, 81, 73, 0.7)';
+            ctx.beginPath();
+            cumAsk = 0;
+            asksInRange.forEach((entry, i) => {
+              cumAsk += Number(entry[1]);
+              const x = chartRect.left + chartRect.width + (cumAsk / totalAskVol) * DEPTH_BAR_WIDTH;
+              const y = priceToY(Number(entry[0]));
+              if (i === 0) ctx.moveTo(x, y);
+              else ctx.lineTo(x, y);
+            });
+            ctx.stroke();
+          } else if (depthViewMode === 'dots') {
+            const maxVol = Math.max(maxBidVol, maxAskVol) || 1;
+            const maxRadius = 12;
+            bidsInRange.forEach(entry => {
+              const price = Number(entry[0]), size = Number(entry[1]);
+              const y = priceToY(price);
+              const r = Math.max(2, (size / maxVol) * maxRadius);
+              ctx.fillStyle = 'rgba(34, 197, 94, 0.6)';
+              ctx.beginPath();
+              ctx.arc(chartRect.left - DEPTH_BAR_WIDTH / 2, y, r, 0, Math.PI * 2);
+              ctx.fill();
+            });
+            asksInRange.forEach(entry => {
+              const price = Number(entry[0]), size = Number(entry[1]);
+              const y = priceToY(price);
+              const r = Math.max(2, (size / maxVol) * maxRadius);
+              ctx.fillStyle = 'rgba(248, 81, 73, 0.6)';
+              ctx.beginPath();
+              ctx.arc(chartRect.left + chartRect.width + DEPTH_BAR_WIDTH / 2, y, r, 0, Math.PI * 2);
+              ctx.fill();
+            });
+          }
+        }
+
+        if (icebergs.length > 0 && pMax > pMin) {
+          ctx.strokeStyle = 'rgba(255, 193, 7, 0.8)';
+          ctx.lineWidth = 1.5;
+          icebergs.forEach(ib => {
+            const price = Number(ib.price);
+            if (price < pMin || price > pMax) return;
+            const y = priceToY(price);
+            ctx.setLineDash([4, 4]);
+            ctx.beginPath();
+            ctx.moveTo(chartRect.left, y);
+            ctx.lineTo(chartRect.left + chartRect.width, y);
+            ctx.stroke();
+          });
+          ctx.setLineDash([]);
+        }
+
+        const visible = trades.filter(t => t.anomaly_score >= anomalyThreshold);
+        const drawn = [];
+        for (let i = 0; i < visible.length; i++) {
+          const t = visible[i];
+          const x = hasTs && t.ts ? timeToX(t.ts) : chartRect.left + (chartRect.width * i) / Math.max(1, visible.length - 1);
+          const y = priceToY(t.price);
+          const side = volumeToSize(t.volume);
+          const opacity = anomalyToOpacity(t.anomaly_score);
+          const isBuy = (t.side || '').toLowerCase() === 'buy';
+          const r = isBuy ? 34 : 248;
+          const g = isBuy ? 197 : 81;
+          const b = isBuy ? 94 : 73;
+          ctx.fillStyle = `rgba(${r},${g},${b},${opacity})`;
+          ctx.fillRect(x - side / 2, y - side / 2, side, side);
+          drawn.push({ trade: t, x, y, side });
+        }
+
+        if (hoveredTrade !== null && drawn[hoveredTrade]) {
+          const d = drawn[hoveredTrade];
+          ctx.strokeStyle = '#fff';
+          ctx.lineWidth = 2;
+          ctx.strokeRect(d.x - d.side / 2 - 1, d.y - d.side / 2 - 1, d.side + 2, d.side + 2);
+        }
+
+        if (trades.length > 0 && lastPrice != null) {
+          let buyVol = 0, sellVol = 0;
+          trades.forEach(t => {
+            if ((t.side || '').toLowerCase() === 'buy') buyVol += t.volume;
+            else sellVol += t.volume;
+          });
+          deltaEl.innerHTML = '<span style="color:#3fb950">Buy ' + formatPrice(buyVol) + '</span> <span style="color:#f85149">Sell ' + formatPrice(sellVol) + '</span>';
+          const ch = lastPrice - firstPrice;
+          const chPct = firstPrice ? ((ch / firstPrice) * 100).toFixed(2) : '0';
+          priceEl.textContent = formatPrice(lastPrice) + (ch >= 0 ? ' ↑ +' : ' ↓ ') + chPct + '%';
+          priceEl.className = 'price-current ' + (ch >= 0 ? 'price-up' : 'price-down');
+        }
+      }
+
+      function findHoveredTrade(mouseX, mouseY) {
+        const prices = trades.map(t => t.price);
+        const lastPrice = prices[prices.length - 1];
+        const hasTs = trades.some(t => t.ts);
+        const visible = trades.filter(t => t.anomaly_score >= anomalyThreshold);
+        let idx = -1;
+        let best = Infinity;
+        for (let i = 0; i < visible.length; i++) {
+          const t = visible[i];
+          const x = hasTs && t.ts ? timeToX(t.ts) : chartRect.left + (chartRect.width * i) / Math.max(1, visible.length - 1);
+          const y = priceToY(t.price);
+          const side = volumeToSize(t.volume);
+          const dx = mouseX - x;
+          const dy = mouseY - y;
+          const dist = Math.max(Math.abs(dx), Math.abs(dy));
+          if (dist < HOVER_RADIUS && dist < best) {
+            best = dist;
+            idx = i;
+          }
+        }
+        return idx >= 0 ? idx : null;
+      }
+
+      function scheduleDraw() {
+        if (rafScheduled) return;
+        rafScheduled = true;
+        requestAnimationFrame(draw);
+      }
+
+      function onMessage(raw) {
+        try {
+          const t = JSON.parse(raw);
+          if (t.type === 'orderbook') {
+            orderbook = {
+              bids: Array.isArray(t.bids) ? t.bids : [],
+              asks: Array.isArray(t.asks) ? t.asks : [],
+            };
+            scheduleDraw();
+            return;
+          }
+          if (t.type === 'orderbook_history' && Array.isArray(t.snapshots)) {
+            orderbookHistory.push(...t.snapshots);
+            if (orderbookHistory.length > MAX_ORDERBOOK_HISTORY) orderbookHistory = orderbookHistory.slice(-MAX_ORDERBOOK_HISTORY);
+            scheduleDraw();
+            return;
+          }
+          if (t.type === 'iceberg' && Array.isArray(t.icebergs)) {
+            icebergs = t.icebergs;
+            scheduleDraw();
+            return;
+          }
+          if (t.type === 'kline' && t.candle) {
+            const c = t.candle;
+            const start = c.start;
+            const idx = candles.findIndex(x => x.start === start);
+            const candle = { start: start, open: Number(c.open), high: Number(c.high), low: Number(c.low), close: Number(c.close), volume: Number(c.volume || 0), confirm: !!c.confirm };
+            if (idx >= 0) candles[idx] = candle;
+            else candles.push(candle);
+            candles.sort((a, b) => a.start - b.start);
+            if (candles.length > 300) candles = candles.slice(-300);
+            scheduleDraw();
+            return;
+          }
+          if (t.type === 'footprint' && t.start != null && Array.isArray(t.levels)) {
+            footprints[t.start] = { start: t.start, end: t.end || t.start + 60000, levels: t.levels };
+            scheduleDraw();
+            return;
+          }
+          if (t.type === 'trade' || (typeof t.price === 'number' && typeof t.volume === 'number')) {
+            trades.push({
+              price: t.price,
+              volume: t.volume,
+              side: t.side || 'Buy',
+              anomaly_score: typeof t.anomaly_score === 'number' ? t.anomaly_score : 1,
+              ts: typeof t.ts === 'number' ? t.ts : null,
+            });
+            if (trades.length > MAX_TRADES) trades.shift();
+            scheduleDraw();
+          }
+        } catch (_) {}
+      }
+
+      function resize() {
+        const wrap = canvas.parentElement;
+        const cw = wrap.clientWidth;
+        const ch = wrap.clientHeight;
+        logicalWidth = cw;
+        logicalHeight = ch;
+        canvas.width = cw * dpr;
+        canvas.height = ch * dpr;
+        canvas.style.width = cw + 'px';
+        canvas.style.height = ch + 'px';
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
+        if (dpr !== 1) ctx.scale(dpr, dpr);
+        scheduleDraw();
+      }
+
+      canvas.addEventListener('mousemove', (e) => {
+        const rect = canvas.getBoundingClientRect();
+        const x = (e.clientX - rect.left) * (logicalWidth / rect.width);
+        const y = (e.clientY - rect.top) * (logicalHeight / rect.height);
+        if (isDragging) {
+          const dy = e.clientY - lastMouseY;
+          const range = pMax - pMin;
+          panPrice += (dy / chartRect.height) * (range ? 1 : 0);
+          lastMouseY = e.clientY;
+          scheduleDraw();
+          return;
+        }
+        const prev = hoveredTrade;
+        hoveredTrade = findHoveredTrade(x, y);
+        if (hoveredTrade !== null) {
+          const visible = trades.filter(t => t.anomaly_score >= anomalyThreshold);
+          const t = visible[hoveredTrade];
+          tooltipEl.innerHTML = 'Цена: ' + formatPrice(t.price) + '<br>Объём: ' + formatPrice(t.volume) + '<br>Сторона: ' + t.side + '<br>Аномалия: ' + t.anomaly_score.toFixed(2);
+          tooltipEl.classList.add('visible');
+          tooltipEl.style.left = Math.min(e.clientX - rect.left + 12, rect.width - 180) + 'px';
+          tooltipEl.style.top = (e.clientY - rect.top + 8) + 'px';
+        } else {
+          tooltipEl.classList.remove('visible');
+        }
+        if (prev !== hoveredTrade) scheduleDraw();
+      });
+
+      canvas.addEventListener('mouseleave', () => {
+        hoveredTrade = null;
+        tooltipEl.classList.remove('visible');
+        if (isDragging) isDragging = false;
+        scheduleDraw();
+      });
+
+      canvas.addEventListener('wheel', (e) => {
+        e.preventDefault();
+        const delta = e.deltaY > 0 ? 1.15 : 1 / 1.15;
+        zoomPrice = Math.max(0.2, Math.min(10, zoomPrice * delta));
+        scheduleDraw();
+      }, { passive: false });
+
+      canvas.addEventListener('mousedown', (e) => {
+        if (e.button === 0) {
+          isDragging = true;
+          lastMouseY = e.clientY;
+          lastPriceCenter = (pMin + pMax) / 2;
+        }
+      });
+
+      canvas.addEventListener('mouseup', (e) => { if (e.button === 0) isDragging = false; });
+
+      scaleModeEl.addEventListener('change', () => { scaleMode = scaleModeEl.value; scheduleDraw(); });
+      anomalySliderEl.addEventListener('input', () => {
+        anomalyThreshold = parseFloat(anomalySliderEl.value);
+        anomalyValEl.textContent = anomalyThreshold.toFixed(1);
+        scheduleDraw();
+      });
+      depthViewModeEl.addEventListener('change', () => {
+        depthViewMode = depthViewModeEl.value;
+        scheduleDraw();
+      });
+      viewModeEl.addEventListener('change', () => {
+        viewMode = viewModeEl.value;
+        scheduleDraw();
+      });
+
+      function connect() {
+        setStatus('Подключение…');
+        ws = new WebSocket(WS_URL);
+        ws.onopen = () => setStatus('Подключено', 'connected');
+        ws.onclose = () => {
+          setStatus('Отключено', 'error');
+          setTimeout(connect, 3000);
+        };
+        ws.onerror = () => setStatus('Ошибка соединения', 'error');
+        ws.onmessage = (e) => onMessage(e.data);
+      }
+
+      const ro = new ResizeObserver(resize);
+      ro.observe(canvas.parentElement);
+      resize();
+      connect();
+    })();
+  </script>
+</body>
+</html>

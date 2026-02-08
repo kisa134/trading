@@ -11,7 +11,7 @@ import sys
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 import redis.asyncio as redis
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Query
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Query, Body
 from fastapi.middleware.cors import CORSMiddleware
 
 from shared.streams import (
@@ -33,6 +33,10 @@ from shared.streams import (
     REDIS_KEY_SCORES_TREND,
     REDIS_KEY_SCORES_EXHAUSTION,
     REDIS_KEY_SIGNALS_RULE,
+    REDIS_KEY_IMBALANCE,
+    REDIS_KEY_IMBALANCE_HISTORY,
+    STREAM_AI_SNAPSHOTS,
+    REDIS_KEY_AI_SNAPSHOT_BLOB,
 )
 
 app = FastAPI(title="Trading Platform API")
@@ -54,18 +58,57 @@ async def get_redis() -> redis.Redis:
 
 
 _broadcast_task: asyncio.Task | None = None
+_ai_controller_task: asyncio.Task | None = None
+
+
+async def send_ai_response(exchange: str, symbol: str, text: str):
+    """Send AI response to all WS clients subscribed to ai_response for (exchange, symbol)."""
+    key = (exchange, symbol)
+    async with subscribers_lock:
+        targets = list(subscribers.get(key, []))
+    msg = {"stream": "ai_response", "data": {"text": text}}
+    payload = json.dumps(msg)
+    dead = []
+    for ch, ws in targets:
+        if ch != "ai_response":
+            continue
+        try:
+            await ws.send_text(payload)
+        except Exception:
+            dead.append((ch, ws))
+    for t in dead:
+        async with subscribers_lock:
+            s = subscribers.get(key, set())
+            s.discard(t)
+            if not s:
+                subscribers.pop(key, None)
 
 
 @app.on_event("startup")
 async def startup():
-    global _broadcast_task
+    global _broadcast_task, _ai_controller_task
     await get_redis()
     _broadcast_task = asyncio.create_task(broadcast_worker())
+    try:
+        from services.market_context_builder import get_or_build_context
+        from services.ai.router import route_multimodal
+        from services.ai.controller import run_controller
+        _ai_controller_task = asyncio.create_task(
+            run_controller(get_redis, get_or_build_context, route_multimodal, send_ai_response)
+        )
+    except Exception as e:
+        print(f"[startup] AI controller not started: {e}")
 
 
 @app.on_event("shutdown")
 async def shutdown():
-    global redis_client, _broadcast_task
+    global redis_client, _broadcast_task, _ai_controller_task
+    if _ai_controller_task:
+        _ai_controller_task.cancel()
+        try:
+            await _ai_controller_task
+        except asyncio.CancelledError:
+            pass
     if _broadcast_task:
         _broadcast_task.cancel()
         try:
@@ -196,6 +239,73 @@ async def health():
     return {"status": "ok"}
 
 
+# --- AI snapshot (visual capture for LLM) ---
+AI_SNAPSHOT_MAX_BODY_BYTES = 5 * 1024 * 1024  # 5 MB
+AI_SNAPSHOT_BLOB_TTL_SEC = 300
+
+
+@app.post("/ai/snapshot", status_code=202)
+async def ai_snapshot(
+    body: dict = Body(..., embed=False),
+):
+    """Accept canvas snapshot (base64 JPEG), store in Redis, push to stream for AI Controller."""
+    exchange = (body.get("exchange") or "").strip() or "bybit"
+    symbol = (body.get("symbol") or "").strip().upper() or "BTCUSDT"
+    image_base64 = body.get("imageBase64")
+    ts = int(body.get("ts") or 0) or __import__("time").time() * 1000
+    trigger = body.get("trigger") or "manual"
+    if not image_base64 or not isinstance(image_base64, str):
+        from fastapi import HTTPException
+        raise HTTPException(status_code=400, detail="imageBase64 required")
+    r = await get_redis()
+    snapshot_id = __import__("uuid").uuid4().hex
+    blob_key = REDIS_KEY_AI_SNAPSHOT_BLOB.format(exchange=exchange, symbol=symbol, ts=ts)
+    await r.set(blob_key, image_base64, ex=AI_SNAPSHOT_BLOB_TTL_SEC)
+    await r.xadd(
+        STREAM_AI_SNAPSHOTS,
+        {"payload": json.dumps({
+            "exchange": exchange,
+            "symbol": symbol,
+            "ts": ts,
+            "snapshotId": snapshot_id,
+            "trigger": trigger,
+            "blobKey": blob_key,
+        })},
+        maxlen=1000,
+    )
+    await r.sadd("ai:active_pairs", f"{exchange}:{symbol}")
+    return {"snapshotId": snapshot_id, "ts": ts}
+
+
+@app.post("/ai/predictions", status_code=201)
+async def ai_save_prediction(body: dict = Body(..., embed=False)):
+    """Record an AI prediction for Outcome Worker and Experience Replay."""
+    from fastapi import HTTPException
+    from services.ai.prediction_store import save_prediction
+    exchange = (body.get("exchange") or "").strip() or "bybit"
+    symbol = (body.get("symbol") or "").strip().upper() or "BTCUSDT"
+    ts_prediction = int(body.get("ts_prediction") or 0) or int(__import__("time").time() * 1000)
+    horizon_minutes = int(body.get("horizon_minutes") or 15)
+    price_at_prediction = float(body.get("price_at_prediction") or 0)
+    if not price_at_prediction:
+        raise HTTPException(status_code=400, detail="price_at_prediction required")
+    target_price = body.get("target_price") and float(body["target_price"]) or None
+    direction = (body.get("direction") or "").strip() or None
+    expected_range_low = body.get("expected_range_low") is not None and float(body["expected_range_low"]) or None
+    expected_range_high = body.get("expected_range_high") is not None and float(body["expected_range_high"]) or None
+    snapshot_ref = (body.get("snapshot_ref") or "").strip() or None
+    context_snapshot = body.get("context_snapshot") if isinstance(body.get("context_snapshot"), dict) else None
+    models_used = body.get("models_used")
+    r = await get_redis()
+    prediction_id = await save_prediction(
+        r, exchange, symbol, ts_prediction, horizon_minutes, price_at_prediction,
+        target_price=target_price, direction=direction,
+        expected_range_low=expected_range_low, expected_range_high=expected_range_high,
+        snapshot_ref=snapshot_ref, context_snapshot=context_snapshot, models_used=models_used,
+    )
+    return {"predictionId": prediction_id, "ts_prediction": ts_prediction}
+
+
 @app.get("/dom/{exchange}/{symbol}")
 async def get_dom(exchange: str, symbol: str):
     """REST: current DOM snapshot."""
@@ -279,6 +389,25 @@ async def get_signals_rule(exchange: str, symbol: str, limit: int = 200):
     key = REDIS_KEY_SIGNALS_RULE.format(exchange=exchange, symbol=symbol)
     items = await r.lrange(key, -limit, -1)
     return [json.loads(x) for x in (items or [])]
+
+
+@app.get("/imbalance/{exchange}/{symbol}")
+async def get_imbalance(
+    exchange: str,
+    symbol: str,
+    limit: int = Query(0, ge=0, le=500, description="History length (0 = current only)"),
+):
+    """REST: current order book imbalance % and optionally last N history points."""
+    r = await get_redis()
+    key_cur = REDIS_KEY_IMBALANCE.format(exchange=exchange, symbol=symbol)
+    raw = await r.get(key_cur)
+    current = json.loads(raw) if raw else {"ts": 0, "imbalance_pct": 0}
+    if limit <= 0:
+        return {"current": current, "history": []}
+    key_hist = REDIS_KEY_IMBALANCE_HISTORY.format(exchange=exchange, symbol=symbol)
+    items = await r.lrange(key_hist, -limit, -1)
+    history = [json.loads(x) for x in (items or [])]
+    return {"current": current, "history": history}
 
 
 @app.get("/kline/{exchange}/{symbol}")

@@ -24,8 +24,21 @@ REDIS_KEY_SIGNALS_RULE = "signals.rule_reversal:{exchange}:{symbol}"
 REDIS_KEY_SCORE_CANDLE = "scores.candle:{exchange}:{symbol}"
 REDIS_KEY_SCORE_VOLUME = "scores.volume:{exchange}:{symbol}"
 REDIS_KEY_SCORE_ORDERBOOK = "scores.orderbook:{exchange}:{symbol}"
+REDIS_KEY_IMBALANCE = "imbalance:{exchange}:{symbol}"
+REDIS_KEY_IMBALANCE_HISTORY = "imbalance_history:{exchange}:{symbol}"
+
+# AI terminal: snapshots, context cache, predictions hot cache, Mamba anomalies
+STREAM_AI_SNAPSHOTS = "ai:snapshots"
+STREAM_AI_MAMBA_ANOMALIES = "ai:mamba_anomalies"
+REDIS_KEY_AI_CONTEXT = "ai:context:{exchange}:{symbol}"
+REDIS_KEY_AI_SNAPSHOT_BLOB = "ai:snapshot:{exchange}:{symbol}:{ts}"
+REDIS_KEY_AI_PREDICTIONS_LIST = "ai:predictions:{exchange}:{symbol}"
+REDIS_KEY_AI_ANOMALIES = "ai:anomalies:{exchange}:{symbol}"
+AI_PREDICTIONS_MAXLEN = 200
+AI_CONTEXT_TTL_SEC = 15
 
 SLICES_MAXLEN = 500
+IMBALANCE_HISTORY_MAXLEN = 500
 TRADES_MAXLEN = 2000
 EVENTS_MAXLEN = 200
 SCORES_MAXLEN = 500

@@ -60,3 +60,45 @@ export async function fetchKline(
   )
   return r.json()
 }
+
+export type ImbalanceResponse = {
+  current: { ts: number; imbalance_pct: number }
+  history: Array<{ ts: number; imbalance_pct: number }>
+}
+
+export async function fetchImbalance(
+  exchange: string,
+  symbol: string,
+  limit = 0
+): Promise<ImbalanceResponse> {
+  const r = await fetch(
+    `${API_BASE}/imbalance/${exchange}/${symbol}?limit=${limit}`
+  )
+  return r.json()
+}
+
+export type SnapshotPayload = {
+  exchange: string
+  symbol: string
+  imageBase64: string
+  ts: number
+  trigger?: 'timer' | 'volume_spike' | 'manual'
+}
+
+export type SnapshotResponse = {
+  snapshotId: string
+  ts: number
+}
+
+export async function uploadSnapshot(payload: SnapshotPayload): Promise<SnapshotResponse> {
+  const r = await fetch(`${API_BASE}/ai/snapshot`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
+  if (!r.ok) {
+    const err = await r.text()
+    throw new Error(err || `Snapshot upload failed: ${r.status}`)
+  }
+  return r.json()
+}
