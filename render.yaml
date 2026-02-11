@@ -1,10 +1,14 @@
+# Blueprint только для сервисов, которые реально есть в репозитории.
+# Воркеры analytics.* (tape_aggregator, iceberg_detector и др.) отключены — пакета analytics нет.
+# После появления analytics — добавьте их в этот файл.
+
 services:
   - type: web
     name: trading-api
     env: python
     rootDir: trading_platform
     buildCommand: pip install -r requirements.txt
-    startCommand: python -m api.main --port $PORT
+    startCommand: python -m api.main --host 0.0.0.0 --port $PORT
     envVars:
       - fromGroup: trading-env-5mux
 
@@ -55,105 +59,6 @@ services:
       - fromGroup: trading-env-5mux
 
   - type: worker
-    name: tape-aggregator
-    env: python
-    rootDir: trading_platform
-    buildCommand: pip install -r requirements.txt
-    startCommand: python -m analytics.tape_aggregator --redis $REDIS_URL
-    envVars:
-      - fromGroup: trading-env-5mux
-
-  - type: worker
-    name: iceberg-detector
-    env: python
-    rootDir: trading_platform
-    buildCommand: pip install -r requirements.txt
-    startCommand: python -m analytics.iceberg_detector --redis $REDIS_URL --exchange bybit --symbol BTCUSDT
-    envVars:
-      - fromGroup: trading-env-5mux
-
-  - type: worker
-    name: wall-spoof-detector
-    env: python
-    rootDir: trading_platform
-    buildCommand: pip install -r requirements.txt
-    startCommand: python -m analytics.wall_spoof_detector --redis $REDIS_URL --exchange bybit --symbol BTCUSDT
-    envVars:
-      - fromGroup: trading-env-5mux
-
-  - type: worker
-    name: heatmap-footprint
-    env: python
-    rootDir: trading_platform
-    buildCommand: pip install -r requirements.txt
-    startCommand: python -m analytics.heatmap_footprint_aggregator --redis $REDIS_URL --exchange bybit --symbol BTCUSDT
-    envVars:
-      - fromGroup: trading-env-5mux
-
-  - type: worker
-    name: tick-anomaly
-    env: python
-    rootDir: trading_platform
-    buildCommand: pip install -r requirements.txt
-    startCommand: python -m services.mamba_core.tick_anomaly --redis $REDIS_URL --exchange bybit --symbol BTCUSDT
-    envVars:
-      - fromGroup: trading-env-5mux
-
-  - type: worker
-    name: feature-candles
-    env: python
-    rootDir: trading_platform
-    buildCommand: pip install -r requirements.txt
-    startCommand: python -m analytics.feature_engine_candles --redis $REDIS_URL
-    envVars:
-      - fromGroup: trading-env-5mux
-
-  - type: worker
-    name: feature-volume
-    env: python
-    rootDir: trading_platform
-    buildCommand: pip install -r requirements.txt
-    startCommand: python -m analytics.feature_engine_volume --redis $REDIS_URL
-    envVars:
-      - fromGroup: trading-env-5mux
-
-  - type: worker
-    name: feature-orderbook
-    env: python
-    rootDir: trading_platform
-    buildCommand: pip install -r requirements.txt
-    startCommand: python -m analytics.feature_engine_orderbook --redis $REDIS_URL --exchange bybit --symbol BTCUSDT
-    envVars:
-      - fromGroup: trading-env-5mux
-
-  - type: worker
-    name: trend-score
-    env: python
-    rootDir: trading_platform
-    buildCommand: pip install -r requirements.txt
-    startCommand: python -m analytics.trend_score_engine --redis $REDIS_URL --exchange bybit --symbol BTCUSDT --window 50
-    envVars:
-      - fromGroup: trading-env-5mux
-
-  - type: worker
-    name: exhaustion-engine
-    env: python
-    rootDir: trading_platform
-    buildCommand: pip install -r requirements.txt
-    startCommand: python -m analytics.exhaustion_engine --redis $REDIS_URL --exchange bybit --symbol BTCUSDT
-    envVars:
-      - fromGroup: trading-env-5mux
-
-  - type: worker
-    name: rule-reversal
-    env: python
-    rootDir: trading_platform
-    buildCommand: pip install -r requirements.txt
-    startCommand: python -m analytics.rule_reversal_engine --redis $REDIS_URL --exchange bybit --symbol BTCUSDT
-    envVars:
-      - fromGroup: trading-env-5mux
-
-  - type: worker
     name: cold-writer
     env: python
     rootDir: trading_platform
@@ -168,6 +73,15 @@ services:
     rootDir: trading_platform
     buildCommand: pip install -r requirements.txt
     startCommand: python -m storage.graph_writer --redis $REDIS_URL
+    envVars:
+      - fromGroup: trading-env-5mux
+
+  - type: worker
+    name: tick-anomaly
+    env: python
+    rootDir: trading_platform
+    buildCommand: pip install -r requirements.txt
+    startCommand: python -m services.mamba_core.tick_anomaly --redis $REDIS_URL --exchange bybit --symbol BTCUSDT
     envVars:
       - fromGroup: trading-env-5mux
 
