@@ -42,7 +42,28 @@ subscribers_lock = asyncio.Lock()
 async def get_redis() -> redis.Redis:
     global redis_client
     if redis_client is None:
-        redis_client = redis.from_url(REDIS_URL, decode_responses=True)
+        try:
+            redis_client = redis.from_url(REDIS_URL, decode_responses=True, socket_connect_timeout=2)
+            # Test connection with timeout
+            await asyncio.wait_for(redis_client.ping(), timeout=2)
+            print("[INFO] Redis connected successfully")
+        except Exception as e:
+            print(f"[WARNING] Redis connection failed: {e}")
+            print("[WARNING] API will work but no data will be available. Please start Redis.")
+            # Create a mock redis client that returns empty results
+            class MockRedis:
+                async def xread(self, *args, **kwargs):
+                    await asyncio.sleep(1)
+                    return []
+                async def get(self, *args, **kwargs):
+                    return None
+                async def lrange(self, *args, **kwargs):
+                    return []
+                async def ping(self):
+                    return False
+                async def aclose(self):
+                    pass
+            redis_client = MockRedis()
     return redis_client
 
 
@@ -52,8 +73,12 @@ _broadcast_task: asyncio.Task | None = None
 @app.on_event("startup")
 async def startup():
     global _broadcast_task
-    await get_redis()
-    _broadcast_task = asyncio.create_task(broadcast_worker())
+    try:
+        await get_redis()
+        _broadcast_task = asyncio.create_task(broadcast_worker())
+    except Exception as e:
+        print(f"[WARNING] Failed to start broadcast worker: {e}")
+        print("[WARNING] WebSocket data streaming will not work without Redis.")
 
 
 @app.on_event("shutdown")
