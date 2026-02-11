@@ -1,12 +1,28 @@
-# Trading Platform (Orderflow)
+# Trading Platform
 
-Платформа ордерфлоу: ingestors → Redis Streams → hot storage → analytics → API → frontend.
+Платформа для получения и визуализации данных с криптобирж: ingestors → Redis Streams → hot storage → API → frontend.
 
-**Фаза 3 — Cold storage:** PostgreSQL (см. `storage/cold_schema.sql`). Запуск writer: `COLD_STORAGE_URL=postgresql://... python -m storage.cold --redis redis://localhost:6379`. REST история: `/history/trades/`, `/history/heatmap/`, `/history/footprint/`, `/history/events/` (при наличии COLD_STORAGE_URL в API читают из БД).
+## Архитектура
 
-## Фаза 1 — Ядро
+```
+Биржи (Bybit/Binance/OKX)
+    ↓ [WebSocket + REST]
+Ingestors (нормализация)
+    ↓ [Redis Streams]
+Hot Storage (DOM, кольцевые буферы)
+    ↓
+API (FastAPI + WebSocket)
+    ↓
+Frontend (Svelte)
+```
 
-**Требования:** Redis, Python 3.11+
+## Требования
+
+- Redis
+- Python 3.11+
+- Node.js 18+ (для фронтенда)
+
+## Установка
 
 1. Установить зависимости:
    ```bash
@@ -20,50 +36,99 @@
    # или: docker run -p 6379:6379 redis:7
    ```
 
-3. В трёх терминалах запустить:
-   - **Hot storage** (читает потоки, пишет DOM и кольцевые буферы в Redis):
-     ```bash
-     python -m storage.hot --redis redis://localhost:6379
-     ```
-   - **Bybit ingestor** (REST snapshot + WebSocket → Redis Streams):
-     ```bash
-     python -m ingestors.bybit.main --redis redis://localhost:6379 --symbol BTCUSDT
-     ```
-   - **API** (WebSocket + REST):
-     ```bash
-     python -m api.main --redis redis://localhost:6379 --port 8000
-     ```
+## Запуск
 
-4. Подключение к API:
-   - WebSocket: `ws://localhost:8000/ws?exchange=bybit&symbol=BTCUSDT&channels=orderbook_realtime,trades_realtime`
-   - REST DOM: `GET /dom/bybit/BTCUSDT`
-   - REST trades: `GET /trades/bybit/BTCUSDT?limit=100`
-   - Health: `GET /health`
+### Backend
 
-**Фаза 2 — Analytics (в отдельных терминалах):**
-- Tape aggregator: `python -m analytics.tape_aggregator --redis redis://localhost:6379`
-- Iceberg detector: `python -m analytics.iceberg_detector --exchange bybit --symbol BTCUSDT`
-- Wall/spoof detector: `python -m analytics.wall_spoof_detector --exchange bybit --symbol BTCUSDT`
-- Heatmap/footprint: `python -m analytics.heatmap_footprint_aggregator --exchange bybit --symbol BTCUSDT`
+В отдельных терминалах запустить:
 
-WebSocket каналы: `orderbook_realtime`, `trades_realtime`, `heatmap_stream`, `footprint_stream`, `events_stream`.
-REST: `/dom/`, `/trades/`, `/heatmap/`, `/footprint/`, `/events/`, `/tape/`.
+1. **Hot storage** (читает потоки, пишет DOM и кольцевые буферы в Redis):
+   ```bash
+   python -m storage.hot --redis redis://localhost:6379
+   ```
 
-Запуск из корня репозитория:
+2. **Ingestors** (выберите одну или несколько бирж):
+   ```bash
+   # Bybit
+   python -m ingestors.bybit.main --redis redis://localhost:6379 --symbol BTCUSDT
+   
+   # Binance
+   python -m ingestors.binance.main --redis redis://localhost:6379 --symbol BTCUSDT
+   
+   # OKX
+   python -m ingestors.okx.main --redis redis://localhost:6379 --symbol BTCUSDT
+   ```
+
+3. **API** (WebSocket + REST):
+   ```bash
+   python -m api.main --redis redis://localhost:6379 --port 8000
+   ```
+
+### Frontend
+
 ```bash
-cd trading_platform
-python -m storage.hot
-# в других терминалах:
-python -m ingestors.bybit.main
-python -m api.main
-# опционально analytics:
-python -m analytics.iceberg_detector
-python -m analytics.heatmap_footprint_aggregator
+cd frontend
+npm install
+npm run dev
 ```
 
-**Фаза 4 — Frontend:** Svelte + TypeScript в `frontend/`. Запуск: `cd frontend && npm install && npm run dev`. Открыть http://localhost:5173. UI: DOM слева, heatmap по центру, footprint снизу, tape и события справа.
+Открыть http://localhost:5173
 
-**Фаза 5 — Мультибиржа:** Ingestors для Binance и OKX в том же формате. Запуск:
-- Binance: `python -m ingestors.binance.main --redis redis://localhost:6379 --symbol BTCUSDT`
-- OKX: `python -m ingestors.okx.main --redis redis://localhost:6379 --symbol BTCUSDT`
-Во фронте в подвале можно выбрать биржу (Bybit / Binance / OKX) и символ.
+## API
+
+### WebSocket
+
+Подключение: `ws://localhost:8000/ws?exchange=bybit&symbol=BTCUSDT&channels=orderbook_realtime,trades_realtime,kline,open_interest,liquidations`
+
+Каналы:
+- `orderbook_realtime` — обновления стакана
+- `trades_realtime` — сделки
+- `kline` — свечи
+- `open_interest` — открытый интерес
+- `liquidations` — ликвидации
+
+### REST Endpoints
+
+- `GET /health` — статус API
+- `GET /dom/{exchange}/{symbol}` — текущий DOM
+- `GET /trades/{exchange}/{symbol}?limit=100` — последние сделки
+- `GET /kline/{exchange}/{symbol}?interval=1&limit=500` — свечи
+- `GET /oi/{exchange}/{symbol}?limit=100` — открытый интерес
+- `GET /liquidations/{exchange}/{symbol}?limit=100` — ликвидации
+
+## Данные
+
+### Bybit
+- Orderbook (snapshot + delta)
+- Trades
+- Kline (OHLCV)
+- Open Interest
+- Liquidations
+
+### Binance
+- Orderbook (snapshot + delta)
+- Trades (aggTrade)
+- Liquidations (forceOrder)
+- Open Interest (REST polling)
+
+### OKX
+- Orderbook (snapshot + delta)
+- Trades
+- Open Interest
+
+## Frontend
+
+Интерфейс с вкладками для каждой биржи:
+- **Левая панель**: Orderbook (DOM) с накопительным объемом
+- **Центральная панель**: График свечей с overlay сделок
+- **Правая панель**: Метрики (OI, последняя цена), таблица сделок, ликвидации
+
+## Опционально: Cold Storage
+
+Для долгосрочного хранения данных в PostgreSQL:
+
+```bash
+COLD_STORAGE_URL=postgresql://user:pass@localhost:5432/db python -m storage.cold --redis redis://localhost:6379
+```
+
+REST история: `/history/trades/{exchange}/{symbol}` (при наличии COLD_STORAGE_URL читает из БД).

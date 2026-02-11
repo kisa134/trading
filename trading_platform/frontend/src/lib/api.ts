@@ -61,72 +61,33 @@ export async function fetchKline(
   return r.json()
 }
 
-export type ImbalanceResponse = {
-  current: { ts: number; imbalance_pct: number }
-  history: Array<{ ts: number; imbalance_pct: number }>
+export type OpenInterestPoint = {
+  ts: number
+  open_interest: number
+  open_interest_value?: number
 }
 
-export async function fetchImbalance(
+export async function fetchOpenInterest(
   exchange: string,
   symbol: string,
-  limit = 0
-): Promise<ImbalanceResponse> {
-  const r = await fetch(
-    `${API_BASE}/imbalance/${exchange}/${symbol}?limit=${limit}`
-  )
+  limit = 100
+): Promise<OpenInterestPoint[]> {
+  const r = await fetch(`${API_BASE}/oi/${exchange}/${symbol}?limit=${limit}`)
   return r.json()
 }
 
-export type SnapshotPayload = {
-  exchange: string
-  symbol: string
-  imageBase64: string
+export type Liquidation = {
   ts: number
-  trigger?: 'timer' | 'volume_spike' | 'manual'
+  price: number
+  quantity: number
+  side: string
 }
 
-export type SnapshotResponse = {
-  snapshotId: string
-  ts: number
-}
-
-export type AiStatusResponse = { openrouter_configured: boolean }
-
-export type MambaSignalData =
-  | { prob_up: number; prob_down: number; delta_score: number; ts: number }
-  | null
-
-export async function fetchMambaSignal(
+export async function fetchLiquidations(
   exchange: string,
-  symbol: string
-): Promise<MambaSignalData> {
-  const r = await fetch(`${API_BASE}/mamba_signal/${exchange}/${symbol}`)
-  if (!r.ok || r.status === 204) return null
-  const data = await r.json()
-  if (data == null) return null
-  return {
-    prob_up: Number(data.prob_up ?? 0),
-    prob_down: Number(data.prob_down ?? 0),
-    delta_score: Number(data.delta_score ?? 0),
-    ts: Number(data.ts ?? 0),
-  }
-}
-
-export async function fetchAiStatus(): Promise<AiStatusResponse> {
-  const r = await fetch(`${API_BASE}/ai/status`)
-  if (!r.ok) return { openrouter_configured: false }
-  return r.json()
-}
-
-export async function uploadSnapshot(payload: SnapshotPayload): Promise<SnapshotResponse> {
-  const r = await fetch(`${API_BASE}/ai/snapshot`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
-  })
-  if (!r.ok) {
-    const err = await r.text()
-    throw new Error(err || `Snapshot upload failed: ${r.status}`)
-  }
+  symbol: string,
+  limit = 100
+): Promise<Liquidation[]> {
+  const r = await fetch(`${API_BASE}/liquidations/${exchange}/${symbol}?limit=${limit}`)
   return r.json()
 }
