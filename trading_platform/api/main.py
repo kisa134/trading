@@ -20,10 +20,12 @@ from shared.streams import (
     STREAM_KLINE,
     STREAM_OPEN_INTEREST,
     STREAM_LIQUIDATIONS,
+    STREAM_MAMBA_PREDICTIONS,
     REDIS_KEY_DOM,
     REDIS_KEY_TRADES,
     REDIS_KEY_OI,
     REDIS_KEY_LIQUIDATIONS,
+    REDIS_KEY_MAMBA_PREDICTIONS,
 )
 
 app = FastAPI(title="Trading Platform API")
@@ -78,6 +80,7 @@ STREAM_TO_CHANNEL = {
     STREAM_KLINE: "kline",
     STREAM_OPEN_INTEREST: "open_interest",
     STREAM_LIQUIDATIONS: "liquidations",
+    STREAM_MAMBA_PREDICTIONS: "mamba_predictions",
 }
 
 
@@ -90,6 +93,7 @@ async def broadcast_worker():
         STREAM_KLINE: "$",
         STREAM_OPEN_INTEREST: "$",
         STREAM_LIQUIDATIONS: "$",
+        STREAM_MAMBA_PREDICTIONS: "$",
     }
     while True:
         try:
@@ -342,6 +346,32 @@ async def history_trades(
     return data[-limit:]
 
 
+@app.get("/predictions/{exchange}/{symbol}")
+async def get_predictions(exchange: str, symbol: str):
+    """REST: current prediction from Redis key."""
+    r = await get_redis()
+    key = REDIS_KEY_MAMBA_PREDICTIONS.format(exchange=exchange, symbol=symbol)
+    raw = await r.get(key)
+    if not raw:
+        return {
+            "exchange": exchange,
+            "symbol": symbol,
+            "direction": None,
+            "confidence": 0.0,
+            "predicted_price": None,
+            "current_price": None,
+        }
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        return {
+            "exchange": exchange,
+            "symbol": symbol,
+            "direction": None,
+            "confidence": 0.0,
+            "predicted_price": None,
+            "current_price": None,
+        }
 
 
 def main():

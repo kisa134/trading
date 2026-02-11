@@ -9,4 +9,9 @@ celery[redis]>=5.3.0
 neo4j>=5.0.0
 # pgvector (optional): for experience_replay similarity search; pip install pgvector
 # ML (optional): pip install -r services/ml_requirements.txt
-# torch, numpy, pandas, scikit-learn
+# Mamba SSM dependencies
+torch>=2.0.0
+numpy>=1.24.0
+scikit-learn>=1.3.0
+mamba-ssm>=2.0.0
+causal-conv1d>=1.4.0

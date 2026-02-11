@@ -91,3 +91,24 @@ export async function fetchLiquidations(
   const r = await fetch(`${API_BASE}/liquidations/${exchange}/${symbol}?limit=${limit}`)
   return r.json()
 }
+
+export type Prediction = {
+  exchange: string
+  symbol: string
+  ts: number
+  direction: 'long' | 'short' | null
+  confidence: number
+  long_prob: number
+  short_prob: number
+  predicted_price: number | null
+  current_price: number | null
+  price_change_pct: number
+}
+
+export async function fetchPredictions(
+  exchange: string,
+  symbol: string
+): Promise<Prediction> {
+  const r = await fetch(`${API_BASE}/predictions/${exchange}/${symbol}`)
+  return r.json()
+}

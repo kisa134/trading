@@ -3,6 +3,7 @@ import { OrderbookTable, type DOMData } from './components/OrderbookTable'
 import { CandlesChart } from './components/CandlesChart'
 import { TradesTable, type Trade } from './components/TradesTable'
 import { MetricsPanel } from './components/MetricsPanel'
+import { PredictionPanel } from './components/PredictionPanel'
 import { useWebSocket } from './hooks/useWebSocket'
 import {
   fetchDom,
@@ -11,9 +12,11 @@ import {
   fetchOpenInterest,
   fetchLiquidations,
   fetchBybitSymbols,
+  fetchPredictions,
   type Candle,
   type OpenInterestPoint,
   type Liquidation,
+  type Prediction,
 } from './lib/api'
 
 type Exchange = 'bybit' | 'binance' | 'okx'
@@ -24,6 +27,7 @@ const CHANNELS = [
   'kline',
   'open_interest',
   'liquidations',
+  'mamba_predictions',
 ]
 
 export const App: React.FC = () => {
@@ -37,6 +41,7 @@ export const App: React.FC = () => {
   const [candles, setCandles] = useState<Candle[]>([])
   const [openInterest, setOpenInterest] = useState<OpenInterestPoint[]>([])
   const [liquidations, setLiquidations] = useState<Liquidation[]>([])
+  const [prediction, setPrediction] = useState<Prediction | null>(null)
 
   const [symbols, setSymbols] = useState<string[]>([])
   const [symbolsLoading, setSymbolsLoading] = useState(false)
@@ -137,8 +142,25 @@ export const App: React.FC = () => {
           ...prev,
         ].slice(0, 50)
       )
+      return
     }
-  }, [])
+
+    if (stream === 'mamba_predictions' && data?.direction != null) {
+      setPrediction({
+        exchange: data.exchange || exchange,
+        symbol: data.symbol || symbol,
+        ts: data.ts || Date.now(),
+        direction: data.direction,
+        confidence: Number(data.confidence ?? 0),
+        long_prob: Number(data.long_prob ?? 0),
+        short_prob: Number(data.short_prob ?? 0),
+        predicted_price: data.predicted_price != null ? Number(data.predicted_price) : null,
+        current_price: data.current_price != null ? Number(data.current_price) : null,
+        price_change_pct: Number(data.price_change_pct ?? 0),
+      })
+      return
+    }
+  }, [exchange, symbol])
 
   const { connected, connect, disconnect } = useWebSocket({
     exchange,
@@ -169,18 +191,20 @@ export const App: React.FC = () => {
   // Загрузка начальных данных
   const loadInitialData = useCallback(async () => {
     try {
-      const [domData, tradesData, candlesData, oiData, liqData] = await Promise.all([
+      const [domData, tradesData, candlesData, oiData, liqData, predData] = await Promise.all([
         fetchDom(exchange, symbol),
         fetchTrades(exchange, symbol, 200),
         fetchKline(exchange, symbol, timeframe, 500),
         fetchOpenInterest(exchange, symbol, 100),
         fetchLiquidations(exchange, symbol, 50),
+        fetchPredictions(exchange, symbol),
       ])
       setDom(domData)
       setTrades(tradesData)
       setCandles(candlesData)
       setOpenInterest(oiData)
       setLiquidations(liqData)
+      setPrediction(predData)
     } catch (err) {
       console.error('Failed to load initial data:', err)
     }
@@ -349,6 +373,7 @@ export const App: React.FC = () => {
         </div>
 
         <div className="right-panel">
+          <PredictionPanel prediction={prediction} />
           <MetricsPanel
             lastPrice={lastPrice}
             openInterest={openInterest}
